@@ -15,6 +15,7 @@ import {
 } from 'firebase/database';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
+/* ---------------- FIREBASE CONFIG ---------------- */
 const firebaseConfig = {
   apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
   authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
@@ -29,6 +30,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getDatabase(app);
 
+/* ---------------- APP ---------------- */
 function App() {
   const [user, setUser] = useState(null);
   const [email, setEmail] = useState('');
@@ -49,34 +51,60 @@ function App() {
   useEffect(() => {
     if (!user) return;
 
-    onValue(ref(db, 'teachers'), snap => setTeachers(snap.val() || {}));
-    onValue(ref(db, 'attendance'), snap => setAttendance(snap.val() || {}));
-    onValue(ref(db, 'terminal_log'), snap => setTerminalLog(snap.val() || '---'));
-    onValue(ref(db, 'latest_scan'), snap => {
-      if (snap.exists()) {
-        setRegUid(snap.val());
+    onValue(ref(db, 'teachers'), s => setTeachers(s.val() || {}));
+    onValue(ref(db, 'attendance'), s => setAttendance(s.val() || {}));
+    onValue(ref(db, 'terminal_log'), s => setTerminalLog(s.val() || '---'));
+
+    onValue(ref(db, 'latest_scan'), s => {
+      if (s.exists()) {
+        setRegUid(s.val());
         setIsScanning(false);
       }
     });
-    onValue(ref(db, 'config/scan_mode'), snap => setIsScanning(snap.val() || false));
+
+    onValue(ref(db, 'config/scan_mode'), s => {
+      setIsScanning(s.val() || false);
+    });
   }, [user]);
 
   const handleLogin = e => {
     e.preventDefault();
-    signInWithEmailAndPassword(auth, email, password).catch(() => alert('Login Failed'));
+    signInWithEmailAndPassword(auth, email, password)
+      .catch(() => alert('Login Failed'));
   };
 
+  const clearEnrollment = () => {
+    remove(ref(db, 'latest_scan'));
+    set(ref(db, 'config/scan_mode'), false);
+    setRegUid('');
+    setRegName('');
+    setIsScanning(false);
+  };
+
+  const resetDay = () => {
+    if (window.confirm("Are you sure you want to reset all attendance for today?")) {
+      set(ref(db, 'attendance'), {});
+    }
+  };
+
+  /* ---------------- LOGIN PAGE ---------------- */
   if (!user) {
     return (
-      <div className="d-flex justify-content-center align-items-center bg-dark" style={{ height: '100vh' }}>
-        <div className="card p-4 shadow-lg border-0" style={{ width: '350px', borderRadius: '15px' }}>
-          <div className="text-center mb-4 text-dark">
-            <h3 className="fw-bold text-primary">EduTrack Login</h3>
+      <div className="vh-100 d-flex justify-content-center align-items-center bg-dark">
+        <div className="card p-4 shadow border-0 w-100 mx-3" style={{ maxWidth: 360 }}>
+          <div className="text-center mb-3">
+            {/* PUBLIC STATIC IMAGE USAGE */}
+            <img 
+            src={`${process.env.PUBLIC_URL}/logo512.jpg`}              alt="EduTrack Logo" 
+              className="img-fluid mb-3" 
+              style={{ maxHeight: '80px', borderRadius: '12px' }} 
+            />
+            <h4 className="fw-bold text-primary">EduTrack Login</h4>
           </div>
           <form onSubmit={handleLogin}>
-            <input type="email" className="form-control mb-2" placeholder="Email" onChange={e => setEmail(e.target.value)} required />
-            <input type="password" className="form-control mb-3" placeholder="Password" onChange={e => setPassword(e.target.value)} required />
-            <button className="btn btn-primary w-100 fw-bold">Login</button>
+            <input className="form-control mb-2" placeholder="Email" required onChange={e => setEmail(e.target.value)} />
+            <input type="password" className="form-control mb-3" placeholder="Password" required onChange={e => setPassword(e.target.value)} />
+            <button className="btn btn-primary w-100">Login</button>
           </form>
         </div>
       </div>
@@ -84,110 +112,178 @@ function App() {
   }
 
   return (
-    <div className="d-flex flex-column flex-md-row" style={{ minHeight: '100vh', background: '#f4f7f6' }}>
+    <div className="min-vh-100 bg-light d-flex flex-column">
 
-      {/* Mobile Top Bar */}
-      <div className="d-md-none bg-dark text-white d-flex justify-content-between align-items-center p-3 shadow-sm">
-        <span className="fw-bold text-primary">EduTrack Pro</span>
-        <button className="btn btn-outline-light btn-sm" onClick={() => setShowMobileMenu(!showMobileMenu)}>☰</button>
-      </div>
+      {/* ---------------- MOBILE TOP BAR ---------------- */}
+      <nav className="navbar navbar-dark bg-dark d-md-none px-3">
+        <span className="navbar-brand fw-bold">EduTrack</span>
+        <button
+          className="btn btn-outline-light"
+          onClick={() => setShowMobileMenu(!showMobileMenu)}
+        >
+          ☰
+        </button>
+      </nav>
 
-      {/* Mobile Menu */}
+      {/* ---------------- MOBILE TOP MENU ---------------- */}
       {showMobileMenu && (
-        <div className="d-md-none bg-dark text-white p-3 shadow-sm">
-          <button className="btn btn-primary w-100 mb-2" onClick={() => { setActiveTab('monitor'); setShowMobileMenu(false); }}>📊 Dashboard</button>
-          <button className="btn btn-primary w-100 mb-2" onClick={() => { setActiveTab('register'); setShowMobileMenu(false); }}>👤 Add User</button>
-          <button className="btn btn-outline-danger w-100 mb-2" onClick={() => { window.confirm("Reset Attendance?") && remove(ref(db, 'attendance')); setShowMobileMenu(false); }}>Reset Day</button>
-          <button className="btn btn-link text-light w-100" onClick={() => signOut(auth)}>Logout</button>
+        <div className="bg-dark text-white d-md-none p-3 shadow">
+          <button
+            className={`btn w-100 mb-2 ${activeTab === 'monitor' ? 'btn-primary' : 'btn-outline-light'}`}
+            onClick={() => { setActiveTab('monitor'); setShowMobileMenu(false); }}
+          >
+            📊 Dashboard
+          </button>
+
+          <button
+            className={`btn w-100 mb-4 ${activeTab === 'register' ? 'btn-primary' : 'btn-outline-light'}`}
+            onClick={() => { setActiveTab('register'); setShowMobileMenu(false); }}
+          >
+            👤 Enrollment
+          </button>
+          
+          <hr className="bg-secondary" />
+          
+          <button className="btn btn-outline-warning w-100 mb-2" onClick={resetDay}>
+            Reset Day
+          </button>
+          <button
+            className="btn btn-outline-danger w-100"
+            onClick={() => signOut(auth)}
+          >
+            Logout
+          </button>
         </div>
       )}
 
-      {/* Sidebar */}
-      <div className="p-4 text-white d-none d-md-flex flex-column shadow" style={{ width: '280px', background: '#111827' }}>
-        <h4 className="fw-bold text-primary mb-5">EduTrack Pro</h4>
-        <nav className="nav flex-column gap-2 flex-grow-1">
-          <button className={`btn text-start p-3 border-0 rounded-3 ${activeTab === 'monitor' ? 'btn-primary text-white' : 'text-secondary bg-transparent'}`} onClick={() => setActiveTab('monitor')}>
-            📊 &nbsp; Dashboard
-          </button>
-          <button className={`btn text-start p-3 border-0 rounded-3 ${activeTab === 'register' ? 'btn-primary text-white' : 'text-secondary bg-transparent'}`} onClick={() => setActiveTab('register')}>
-            👤 &nbsp; Add User
-          </button>
-        </nav>
-        <button className="btn btn-outline-danger btn-sm w-100 mb-2 mt-auto" onClick={() => window.confirm("Reset Attendance?") && remove(ref(db, 'attendance'))}>Reset Day</button>
-        <button className="btn btn-link text-secondary btn-sm text-decoration-none" onClick={() => signOut(auth)}>Logout</button>
-      </div>
+      <div className="d-flex flex-grow-1">
 
-      {/* Main Content */}
-      <div className="flex-grow-1 p-3 p-md-4 d-flex flex-column overflow-auto">
-        <h2 className="fw-bold mb-4 text-dark">{activeTab === 'monitor' ? "Live Attendance Monitoring" : "Enrollment Center"}</h2>
+        {/* ---------------- DESKTOP SIDEBAR ---------------- */}
+        <div className="bg-dark text-white p-4 d-none d-md-flex flex-column sticky-top"
+          style={{ width: 260, height: '100vh' }}>
+          <h5 className="fw-bold text-primary mb-4">EduTrack Pro</h5>
 
-        {activeTab === 'monitor' ? (
-          <div className="card border-0 shadow-sm rounded-4 overflow-hidden mb-4">
-            <div className="table-responsive">
-              <table className="table align-middle mb-0 bg-white">
-                <thead className="table-light">
-                  <tr className="text-muted small fw-bold">
-                    <th className="ps-4 py-3">TEACHER NAME</th>
-                    <th>UID</th>
-                    <th>IN</th>
-                    <th>OUT</th>
-                    <th>STATUS</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.keys(teachers).map(uid => (
-                    <tr key={uid}>
-                      <td className="ps-4 py-3 fw-bold">{teachers[uid].name}</td>
-                      <td className="text-muted small font-monospace">{uid}</td>
-                      <td className="text-success fw-bold">{attendance[uid]?.checkin || '--:--'}</td>
-                      <td className="text-muted">{attendance[uid]?.checkout || '--:--'}</td>
-                      <td>
-                        <span className={`badge rounded-pill px-3 py-2 ${attendance[uid]?.checkin ? 'bg-success' : 'bg-danger-subtle text-danger'}`}>
-                          {attendance[uid]?.checkin ? 'Present' : 'Absent'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          <button className={`btn mb-2 ${activeTab === 'monitor' ? 'btn-primary' : 'btn-outline-light'}`}
+            onClick={() => setActiveTab('monitor')}>
+            📊 Dashboard
+          </button>
+
+          <button className={`btn mb-2 ${activeTab === 'register' ? 'btn-primary' : 'btn-outline-light'}`}
+            onClick={() => setActiveTab('register')}>
+            👤 Enrollment
+          </button>
+
+          {/* Bottom Actions */}
+          <div className="mt-auto">
+            <button className="btn btn-outline-warning w-100 mb-2" onClick={resetDay}>
+              Reset Day
+            </button>
+            <button className="btn btn-outline-danger w-100" onClick={() => signOut(auth)}>
+              Logout
+            </button>
           </div>
-        ) : (
-          <div className="card shadow border-0 p-5 mx-auto text-center mb-4 bg-white" style={{ maxWidth: '500px', borderRadius: '20px' }}>
-            {!regUid ? (
-              <div className="py-4 text-dark">
-                <h5 className="fw-bold mb-3">{isScanning ? "📡 Scanning Hardware..." : "Ready to Register"}</h5>
-                <button className="btn btn-primary btn-lg shadow-sm px-5 w-100 w-md-auto" onClick={() => set(ref(db, 'config/scan_mode'), true)} disabled={isScanning}>
-                  {isScanning ? "Tap Card Now" : "Start Registration Scan"}
-                </button>
+        </div>
+
+        {/* ---------------- MAIN CONTENT ---------------- */}
+        <div className="flex-grow-1 p-3 p-md-4 d-flex flex-column">
+
+          <h4 className="fw-bold mb-3">
+            {activeTab === 'monitor' ? 'Live Attendance' : 'Enrollment Center'}
+          </h4>
+
+          <div className="flex-grow-1">
+            {/* ENROLLMENT */}
+            {activeTab === 'register' && (
+              <div className="card shadow border-0 mx-auto p-3" style={{ maxWidth: 420 }}>
+                {!regUid ? (
+                  <>
+                    <p className="text-center fw-bold">
+                      {isScanning ? '📡 Tap RFID Card' : 'Ready'}
+                    </p>
+                    <button
+                      className="btn btn-primary w-100 mb-2"
+                      onClick={() => set(ref(db, 'config/scan_mode'), true)}
+                      disabled={isScanning}
+                    >
+                      Start Scan
+                    </button>
+                    {isScanning && (
+                      <button className="btn btn-outline-danger w-100" onClick={clearEnrollment}>
+                        Cancel Scan
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <form onSubmit={e => {
+                    e.preventDefault();
+                    set(ref(db, `teachers/${regUid}`), { name: regName }).then(() => {
+                      clearEnrollment();
+                      setActiveTab('monitor');
+                    });
+                  }}>
+                    <div className="alert alert-info fw-bold">UID: {regUid}</div>
+                    <input
+                      className="form-control mb-2"
+                      placeholder="Teacher Name"
+                      required
+                      value={regName}
+                      onChange={e => setRegName(e.target.value)}
+                    />
+                    <button className="btn btn-success w-100 mb-2">Save</button>
+                    <button type="button" className="btn btn-outline-danger w-100" onClick={clearEnrollment}>
+                      Rescan
+                    </button>
+                  </form>
+                )}
               </div>
-            ) : (
-              <form onSubmit={(e) => {
-                e.preventDefault();
-                set(ref(db, `teachers/${regUid}`), { name: regName }).then(() => {
-                  remove(ref(db, 'latest_scan')); setRegName(''); setRegUid(''); setActiveTab('monitor');
-                });
-              }}>
-                <div className="alert alert-info border-0 shadow-sm fw-bold mb-4">UID: {regUid}</div>
-                <input className="form-control form-control-lg bg-light border-0 mb-3" placeholder="Teacher Full Name" value={regName} onChange={e => setRegName(e.target.value)} required />
-                <button className="btn btn-success btn-lg w-100 fw-bold">Save Profile</button>
-              </form>
+            )}
+
+            {/* DASHBOARD */}
+            {activeTab === 'monitor' && (
+              <div className="card shadow border-0">
+                <div className="table-responsive">
+                  <table className="table mb-0">
+                    <thead className="table-light">
+                      <tr>
+                        <th>Name</th>
+                        <th>UID</th>
+                        <th>IN</th>
+                        <th>OUT</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.keys(teachers).map(uid => (
+                        <tr key={uid}>
+                          <td>{teachers[uid].name}</td>
+                          <td className="text-muted">{uid}</td>
+                          <td>{attendance[uid]?.checkin || '--'}</td>
+                          <td>{attendance[uid]?.checkout || '--'}</td>
+                          <td>
+                            <span className={`badge ${attendance[uid]?.checkin ? 'bg-success' : 'bg-danger'}`}>
+                              {attendance[uid]?.checkin ? 'Present' : 'Absent'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             )}
           </div>
-        )}
 
-        {/* Terminal Log */}
-        <div className="mt-auto">
-          <div className="card border-0 shadow rounded-3 overflow-hidden bg-white border border-secondary">
-            <div className="bg-light border-bottom px-3 py-2 small fw-bold text-dark font-monospace">
-              SERIAL_MONITOR_BRIDGE
-            </div>
-            <div className="card-body p-3 font-monospace bg-white">
-              <span className="text-primary fw-bold">[{new Date().toLocaleTimeString()}]</span>
-              <span className="ms-2 text-dark fw-bold">{terminalLog}</span>
-              <span className="ms-1 border-start border-dark border-2 animate-pulse">_</span>
+          {/* ---------------- TERMINAL AT THE VERY BOTTOM ---------------- */}
+          <div className="mt-4">
+            <div className="card shadow-sm border-0">
+              <div className="card-header fw-bold bg-white">SERIAL_MONITOR</div>
+              <div className="card-body font-monospace small bg-light"
+                style={{ maxHeight: 150, overflowY: 'auto' }}>
+                {terminalLog}
+              </div>
             </div>
           </div>
+
         </div>
       </div>
     </div>
