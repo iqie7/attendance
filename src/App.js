@@ -114,7 +114,7 @@ function App() {
           <form onSubmit={handleLogin} autoComplete="off">
             <div className="text-start mb-3">
               <label className="small fw-bold text-secondary mb-1">ADMINISTRATOR ID</label>
-              <input type="text" className="form-control bg-light border-0 py-2" autoComplete="new-password" onChange={e => setEmail(e.target.value)} required />
+              <input type="text" className="form-control bg-light border-0 py-2" placeholder="******" onChange={e => setEmail(e.target.value)} required />
             </div>
             <div className="text-start mb-4">
               <label className="small fw-bold text-secondary mb-1">SECURITY KEY</label>
