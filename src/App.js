@@ -26,32 +26,33 @@ function App() {
   const [activeTab, setActiveTab] = useState('monitor');
   const [teachers, setTeachers] = useState({});
   const [attendance, setAttendance] = useState({});
-  const [allData, setAllData] = useState({}); // Used for Monthly/Weekly Calculation
+  const [allData, setAllData] = useState({}); 
   const [regUid, setRegUid] = useState('');
   const [regName, setRegName] = useState('');
   const [isScanning, setIsScanning] = useState(false);
   const [terminalLog, setTerminalLog] = useState('System Initialized...');
   const [showMobileMenu, setShowMobileMenu] = useState(false);
 
-  // Analytics Settings
+  // Analytics Logic
   const [analyticsMode, setAnalyticsMode] = useState('monthly'); 
   const [selectedWeek, setSelectedWeek] = useState(1);
 
   // Date Logic
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().substring(0, 7));
+  
+  // Refs to force open pickers on iPhone
   const dateInputRef = useRef(null);
+  const monthInputRef = useRef(null);
 
   const formatMalaysianDate = (dateString) => {
     const [year, month, day] = dateString.split('-');
     return `${day}/${month}/${year}`;
   };
 
-  const getWeekNumber = (d) => {
-    d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-    d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
-    var yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-    return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  const getWeekOfMonth = (dateString) => {
+    const day = new Date(dateString).getDate();
+    return Math.ceil(day / 7);
   };
 
   const getDiffInHours = (checkin, checkout) => {
@@ -78,7 +79,6 @@ function App() {
     const attendanceRef = ref(db, `attendance/${selectedDate}`);
     const unsubscribe = onValue(attendanceRef, s => setAttendance(s.val() || {}));
     onValue(ref(db, 'attendance'), s => setAllData(s.val() || {}));
-
     return () => unsubscribe();
   }, [user, selectedDate]);
 
@@ -107,14 +107,14 @@ function App() {
       <div className="vh-100 d-flex justify-content-center align-items-center" style={{ background: '#0f172a' }}>
         <div className="card p-5 shadow-lg border-0 w-100 mx-3 text-center" style={{ maxWidth: 420, borderRadius: '24px', background: '#ffffff' }}>
           <div className="mb-4">
-            <img src={`${process.env.PUBLIC_URL}/logo512.jpg`} alt="EduTrack Logo" className="mx-auto mb-3 rounded-3 shadow-sm" style={{ width: '80px', height: '80px', objectFit: 'cover' }} />
+            <img src={`${process.env.PUBLIC_URL}/logo512.jpg`} alt="Logo" className="mx-auto mb-3 rounded-3 shadow-sm" style={{ width: '80px', height: '80px', objectFit: 'cover' }} />
             <h3 className="fw-bold text-dark">EduTrack Pro</h3>
             <p className="text-muted small">Sign in to manage attendance</p>
           </div>
           <form onSubmit={handleLogin} autoComplete="off">
             <div className="text-start mb-3">
               <label className="small fw-bold text-secondary mb-1">ADMINISTRATOR ID</label>
-              <input type="text" className="form-control bg-light border-0 py-2" placeholder="******" onChange={e => setEmail(e.target.value)} required />
+              <input type="text" className="form-control bg-light border-0 py-2" placeholder="*****" onChange={e => setEmail(e.target.value)} required />
             </div>
             <div className="text-start mb-4">
               <label className="small fw-bold text-secondary mb-1">SECURITY KEY</label>
@@ -149,29 +149,28 @@ function App() {
         .status-pill { font-size: 0.75rem; padding: 5px 12px; border-radius: 100px; font-weight: 600; text-transform: uppercase; }
         .status-present { background: #dcfce7; color: #15803d; }
         .status-absent { background: #fee2e2; color: #b91c1c; }
-        .custom-date-box { cursor: pointer; background: #fff; border: 1px solid #dee2e6; padding: 5px 15px; border-radius: 10px; transition: 0.2s; }
+        .custom-date-box { cursor: pointer; background: #fff; border: 1px solid #dee2e6; padding: 5px 15px; border-radius: 10px; transition: 0.2s; position: relative; }
         .custom-date-box:hover { border-color: #4f46e5; }
-        .scan-pulse { animation: pulse-blue 2s infinite; }
-        @keyframes pulse-blue {
-          0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.7); }
-          70% { transform: scale(1); box-shadow: 0 0 0 15px rgba(79, 70, 229, 0); }
-          100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(79, 70, 229, 0); }
+        /* iPhone Specific Fixes */
+        input[type="date"], input[type="month"] {
+            appearance: none;
+            -webkit-appearance: none;
+            min-height: 1.2em;
         }
       `}</style>
 
-      <nav className="navbar navbar-dark bg-dark d-md-none px-4 sticky-top shadow-sm" style={{ background: '#1e293b' }}>
+      <nav className="navbar navbar-dark bg-dark d-md-none px-4 sticky-top shadow-sm" style={{ background: '#1e293b', zIndex: 1050 }}>
         <span className="navbar-brand fw-bold">EduTrack Pro</span>
         <button className="btn btn-outline-light btn-sm rounded-3" onClick={() => setShowMobileMenu(!showMobileMenu)}>{showMobileMenu ? '✕ Close' : '☰ Menu'}</button>
       </nav>
 
       {showMobileMenu && (
-        <div className="bg-dark text-white d-md-none p-4 shadow-lg position-relative" style={{ background: '#1e293b', borderTop: '1px solid #334155' }}>
+        <div className="bg-dark text-white d-md-none p-4 shadow-lg position-fixed w-100" style={{ background: '#1e293b', zIndex: 1040, top: '56px', height: '100vh' }}>
           <button className={`nav-link-custom mb-2 ${activeTab === 'monitor' ? 'active-nav' : ''}`} onClick={() => { setActiveTab('monitor'); setShowMobileMenu(false); }}>📊 Dashboard</button>
           <button className={`nav-link-custom mb-2 ${activeTab === 'teachers' ? 'active-nav' : ''}`} onClick={() => { setActiveTab('teachers'); setShowMobileMenu(false); }}>👨‍🏫 Teachers</button>
           <button className={`nav-link-custom ${activeTab === 'register' ? 'active-nav' : ''}`} onClick={() => { setActiveTab('register'); setShowMobileMenu(false); }}>👤 Enrollment</button>
           <hr className="bg-secondary" />
-          <button className="btn btn-outline-warning w-100 border-0 mb-2" onClick={resetDay}>Reset Data</button>
-          <button className="btn btn-outline-danger w-100 border-0" onClick={() => signOut(auth)}>Sign Out</button>
+          <button className="btn btn-outline-danger w-100 border-0 text-start" onClick={() => signOut(auth)}>Sign Out</button>
         </div>
       )}
 
@@ -199,16 +198,16 @@ function App() {
                     <div className="fw-bold text-dark">{formatMalaysianDate(selectedDate)}</div>
                   </div>
                   <span className="text-primary fs-5">📅</span>
-                  <input ref={dateInputRef} type="date" className="position-absolute opacity-0" style={{pointerEvents: 'none'}} value={selectedDate} onChange={e => setSelectedDate(e.target.value)} />
+                  <input ref={dateInputRef} type="date" className="position-absolute opacity-0" style={{top:0, left:0, width:'100%', height:'100%', cursor:'pointer'}} value={selectedDate} onChange={e => setSelectedDate(e.target.value)} />
                 </div>
                )}
 
                {activeTab === 'teachers' && (
-                 <div className="d-flex flex-wrap gap-2 align-items-center justify-content-start justify-content-md-end">
+                 <div className="d-flex flex-wrap gap-2 align-items-center justify-content-start">
                    {analyticsMode === 'weekly' && (
                      <div className="bg-white p-2 shadow-sm rounded-3 d-flex align-items-center gap-2 border">
                        <span className="small fw-bold text-muted ps-2">WEEK:</span>
-                       <select className="form-select form-select-sm border-0 bg-light fw-bold" style={{ width: 'auto', minWidth: '100px' }} value={selectedWeek} onChange={e => setSelectedWeek(parseInt(e.target.value))}>
+                       <select className="form-select form-select-sm border-0 bg-light fw-bold" style={{ width: '110px' }} value={selectedWeek} onChange={e => setSelectedWeek(parseInt(e.target.value))}>
                          <option value="1">Week 1</option>
                          <option value="2">Week 2</option>
                          <option value="3">Week 3</option>
@@ -216,9 +215,9 @@ function App() {
                        </select>
                      </div>
                    )}
-                   <div className="bg-white p-2 shadow-sm rounded-3 d-flex align-items-center gap-2 border">
+                   <div className="bg-white p-2 shadow-sm rounded-3 d-flex align-items-center gap-2 border" onClick={() => monthInputRef.current.showPicker()}>
                      <span className="small fw-bold text-muted ps-2">MONTH:</span>
-                     <input type="month" className="form-control form-control-sm border-0 bg-light fw-bold" style={{ width: 'auto' }} value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} />
+                     <input ref={monthInputRef} type="month" className="form-control form-control-sm border-0 bg-light fw-bold" style={{ width: '140px' }} value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} />
                    </div>
                  </div>
                )}
@@ -226,21 +225,20 @@ function App() {
             
             {activeTab === 'monitor' && (
               <>
-                <div className="row g-4 mb-5 text-center">
-                  <div className="col-6 col-md-3"><div className="metric-card p-4"><h2 className="fw-bold mb-0">{totalTeachers}</h2><span className="text-secondary small fw-bold">TOTAL STAFF</span></div></div>
-                  <div className="col-6 col-md-3"><div className="metric-card p-4 border-start border-primary border-4"><h2 className="fw-bold text-primary mb-0">{presentToday}</h2><span className="text-secondary small fw-bold">PRESENT TODAY</span></div></div>
+                <div className="row g-4 mb-4">
+                  <div className="col-6 col-md-3"><div className="metric-card p-4 text-center"><h2 className="fw-bold mb-0">{totalTeachers}</h2><span className="text-secondary small fw-bold">TOTAL STAFF</span></div></div>
+                  <div className="col-6 col-md-3"><div className="metric-card p-4 text-center border-start border-primary border-4"><h2 className="fw-bold text-primary mb-0">{presentToday}</h2><span className="text-secondary small fw-bold">PRESENT TODAY</span></div></div>
                 </div>
                 <div className="card metric-card overflow-hidden">
                   <div className="table-responsive">
                     <table className="table adaptive-table align-middle mb-0">
                       <thead className="table-light small fw-bold text-muted text-uppercase">
-                        <tr><th className="ps-4">Staff Name</th><th className="d-none d-md-table-cell">UID</th><th>In</th><th>Out</th><th className="text-center">Status</th></tr>
+                        <tr><th className="ps-4">Staff Name</th><th>In</th><th>Out</th><th className="text-center">Status</th></tr>
                       </thead>
                       <tbody>
                         {Object.keys(teachers).map(uid => (
                           <tr key={uid}>
-                            <td className="ps-4 name-col fw-bold">{teachers[uid].name}</td>
-                            <td className="text-muted d-none d-md-table-cell small font-monospace">{uid}</td>
+                            <td className="ps-4 name-col fw-bold text-dark">{teachers[uid].name}</td>
                             <td>{attendance[uid]?.checkin || '--:--'}</td>
                             <td>{attendance[uid]?.checkout || '--:--'}</td>
                             <td className="text-center"><span className={`status-pill ${attendance[uid]?.checkin ? 'status-present' : 'status-absent'}`}>{attendance[uid]?.checkin ? 'Present' : 'Missing'}</span></td>
@@ -256,7 +254,7 @@ function App() {
             {activeTab === 'teachers' && (
               <div className="card metric-card overflow-hidden">
                 <div className="p-3 bg-white border-bottom d-flex justify-content-between align-items-center flex-wrap gap-2">
-                  <div className="small fw-bold text-muted text-uppercase">Total Hours - {analyticsMode === 'weekly' ? `Week ${selectedWeek}` : 'Monthly'} ({selectedMonth})</div>
+                  <div className="small fw-bold text-muted text-uppercase">Total Hours - {analyticsMode === 'weekly' ? `Week ${selectedWeek}` : 'Monthly'}</div>
                   <div className="btn-group btn-group-sm shadow-sm">
                     <button className={`btn ${analyticsMode === 'weekly' ? 'btn-primary' : 'btn-outline-primary'}`} onClick={() => setAnalyticsMode('weekly')}>Week</button>
                     <button className={`btn ${analyticsMode === 'monthly' ? 'btn-primary' : 'btn-outline-primary'}`} onClick={() => setAnalyticsMode('monthly')}>Month</button>
@@ -271,12 +269,13 @@ function App() {
                       {Object.keys(teachers).map(uid => {
                         let totalHrs = 0;
                         Object.keys(allData).forEach(date => {
-                          const dayOfMonth = new Date(date).getDate();
                           let match = false;
                           if (analyticsMode === 'weekly') {
-                            const weekNum = Math.ceil(dayOfMonth / 7);
+                            const weekNum = getWeekOfMonth(date);
                             if (weekNum === selectedWeek && date.startsWith(selectedMonth)) match = true;
-                          } else if (analyticsMode === 'monthly' && date.startsWith(selectedMonth)) match = true;
+                          } else {
+                            if (date.startsWith(selectedMonth)) match = true;
+                          }
                           if (match && allData[date][uid]) totalHrs += getDiffInHours(allData[date][uid].checkin, allData[date][uid].checkout);
                         });
                         return (<tr key={uid}><td className="ps-4 fw-bold text-dark">{teachers[uid].name}</td><td className="text-center fw-bold text-primary">{totalHrs.toFixed(2)} Hrs</td></tr>);
@@ -291,7 +290,7 @@ function App() {
               <div className="card metric-card p-5 mx-auto text-center shadow-lg" style={{ maxWidth: 500 }}>
                 {!regUid ? (
                   <div className="py-4">
-                    <div className={`mb-4 mx-auto d-flex align-items-center justify-content-center rounded-circle ${isScanning ? 'bg-primary text-white scan-pulse' : 'bg-light text-muted'}`} style={{ width: '100px', height: '100px' }}><span className="fs-1">{isScanning ? '📡' : '👤'}</span></div>
+                    <div className={`mb-4 mx-auto d-flex align-items-center justify-content-center rounded-circle ${isScanning ? 'bg-primary text-white' : 'bg-light text-muted'}`} style={{ width: '100px', height: '100px' }}><span className="fs-1">{isScanning ? '📡' : '👤'}</span></div>
                     <h4 className="fw-bold mb-3">{isScanning ? 'Searching...' : 'New Enrollment'}</h4>
                     <div className="d-flex flex-column gap-2">
                       <button className="btn btn-primary px-5 py-2 fw-bold shadow-sm" style={{borderRadius: '12px'}} onClick={() => set(ref(db, 'config/scan_mode'), true)} disabled={isScanning}>Start Scan</button>
@@ -300,7 +299,7 @@ function App() {
                   </div>
                 ) : (
                   <form onSubmit={e => { e.preventDefault(); set(ref(db, `teachers/${regUid}`), { name: regName }).then(() => { clearEnrollment(); setActiveTab('monitor'); }); }}>
-                    <div className="alert alert-primary fw-bold mb-4 text-truncate text-start small">ID: {regUid}</div>
+                    <div className="alert alert-primary fw-bold mb-4 text-start small">ID: {regUid}</div>
                     <label className="small fw-bold text-secondary mb-2 text-start d-block">STAFF FULL NAME</label>
                     <input className="form-control form-control-lg border-0 bg-light mb-4 py-3" placeholder="Enter name" required value={regName} onChange={e => setRegName(e.target.value)} autoFocus />
                     <button className="btn btn-success btn-lg w-100 fw-bold shadow-sm" style={{borderRadius: '12px'}}>Confirm Save</button>
@@ -315,10 +314,7 @@ function App() {
             <div className="card border-0 shadow-sm" style={{ borderRadius: '12px', overflow: 'hidden' }}>
               <div className="card-header bg-white border-0 py-2 fw-bold small text-start">SERIAL_MONITOR</div>
               <div className="card-body bg-light font-monospace p-3 border-top text-start" style={{ minHeight: '60px', maxHeight: '120px', overflowY: 'auto', fontSize: '0.85rem' }}>
-                <div className="d-flex align-items-center">
-                   <span className="text-success me-2">✅</span>
-                   <span>{terminalLog}</span>
-                </div>
+                <div className="d-flex align-items-center"><span className="text-success me-2">✅</span><span>{terminalLog}</span></div>
               </div>
             </div>
           </div>
