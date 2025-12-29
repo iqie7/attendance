@@ -3,13 +3,13 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { getDatabase, ref, onValue, set, remove, push } from 'firebase/database';
 import 'bootstrap/dist/css/bootstrap.min.css';
-import { QrReader } from '@blackbox-vision/react-qr-reader'; 
 import QRCode from 'react-qr-code'; 
+import jsQR from 'jsqr'; 
 
 // ==========================================
 //  GLOBAL CONFIGURATION
 // ==========================================
-const GRACE_PERIOD_MINUTES = 2; // Grace period (Early/Late buffer)
+const GRACE_PERIOD_MINUTES = 2; 
 
 /* ---------------- FIREBASE CONFIG ---------------- */
 const firebaseConfig = {
@@ -27,19 +27,17 @@ const auth = getAuth(app);
 const db = getDatabase(app);
 
 // ==========================================
-//  HELPER: SMART LOGIC FOR ASSIGNING SCANS
+//  HELPER: SMART LOGIC
 // ==========================================
 const processDailyScans = (schedules, rawLogs) => {
   const processedData = schedules.map(() => ({ logs: [] }));
-
   if (!rawLogs) return processedData.map(() => ({ checkin: '--:--', checkout: '--:--', status: 'missing' }));
-
+  
   const sortedScans = Object.values(rawLogs).map(l => l.time).sort();
 
   sortedScans.forEach(scanTime => {
     const [h, m] = scanTime.split(':').map(Number);
     const scanMins = h * 60 + m;
-
     let bestMatchIndex = -1;
     let bestDistance = Infinity;
     let isStrictMatch = false;
@@ -50,32 +48,20 @@ const processDailyScans = (schedules, rawLogs) => {
       const [eh, em] = endStr.split(':').map(Number);
       const startMins = sh * 60 + sm;
       const endMins = eh * 60 + em;
-
       const bufferStart = startMins - GRACE_PERIOD_MINUTES; 
       const bufferEnd = endMins + GRACE_PERIOD_MINUTES;      
 
       if (scanMins >= bufferStart && scanMins <= bufferEnd) {
         const strictlyInside = (scanMins >= startMins && scanMins <= endMins);
         const dist = Math.abs(scanMins - startMins);
-
         if (strictlyInside) {
-          if (!isStrictMatch || dist < bestDistance) {
-            bestMatchIndex = index;
-            bestDistance = dist;
-            isStrictMatch = true;
-          }
+          if (!isStrictMatch || dist < bestDistance) { bestMatchIndex = index; bestDistance = dist; isStrictMatch = true; }
         } else if (!isStrictMatch) {
-          if (dist < bestDistance) {
-            bestMatchIndex = index;
-            bestDistance = dist;
-          }
+          if (dist < bestDistance) { bestMatchIndex = index; bestDistance = dist; }
         }
       }
     });
-
-    if (bestMatchIndex !== -1) {
-      processedData[bestMatchIndex].logs.push(scanTime);
-    }
+    if (bestMatchIndex !== -1) processedData[bestMatchIndex].logs.push(scanTime);
   });
 
   return processedData.map((data, index) => {
@@ -83,27 +69,22 @@ const processDailyScans = (schedules, rawLogs) => {
     const [startStr] = sch.time.split(' - ');
     const [sh, sm] = startStr.split(':').map(Number);
     const startMins = sh * 60 + sm;
-
     if (data.logs.length === 0) return { checkin: '--:--', checkout: '--:--', status: 'missing' };
-    
     const uniqueLogs = [...new Set(data.logs)];
     const checkin = uniqueLogs[0];
     const checkout = uniqueLogs.length > 1 ? uniqueLogs[uniqueLogs.length - 1] : '--:--';
-
     const [ch, cm] = checkin.split(':').map(Number);
     const checkinMins = ch * 60 + cm;
     const lateThreshold = startMins + GRACE_PERIOD_MINUTES; 
-
     let status = 'present';
     if (checkinMins > lateThreshold) status = 'late';
-
     return { checkin, checkout, status };
   });
 };
 
-
 // ==========================================
 //  COMPONENT 1: DEDICATED QR SCANNER (KIOSK)
+//  (FIXED: USES INTERVAL TIMER FOR STABILITY)
 // ==========================================
 function QRScannerPage() {
   const [scanResult, setScanResult] = useState(null); 
@@ -111,8 +92,10 @@ function QRScannerPage() {
   const [debugScannedCode, setDebugScannedCode] = useState('');
   const [teachers, setTeachers] = useState(null);
   
-  const [cameraKey, setCameraKey] = useState(0); 
-  const [facingMode, setFacingMode] = useState('environment'); 
+  // REFS
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [facingMode, setFacingMode] = useState('user'); // Default Front Camera
   const lockScan = useRef(false);
   const fileInputRef = useRef(null); 
 
@@ -120,19 +103,83 @@ function QRScannerPage() {
     onValue(ref(db, 'teachers'), s => {
       const data = s.val() || {};
       setTeachers(data);
-      console.log("System Loaded. IDs:", Object.keys(data));
     });
   }, []);
 
+  // --- 1. START CAMERA ---
+  useEffect(() => {
+    let stream = null;
+    let intervalId = null;
+
+    const startCamera = async () => {
+      try {
+        const constraints = { 
+            video: { 
+                facingMode: facingMode,
+                width: { ideal: 1280 }, // Try higher resolution for clarity
+                height: { ideal: 720 }
+            } 
+        };
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.setAttribute("playsinline", true); 
+          await videoRef.current.play();
+          
+          // Start Scanning Loop (Every 100ms = 10 times a second)
+          intervalId = setInterval(scanFrame, 100);
+        }
+      } catch (err) {
+        console.error("Camera Error:", err);
+        alert("Camera failed. Please allow permissions.");
+      }
+    };
+
+    startCamera();
+
+    return () => {
+      if (stream) stream.getTracks().forEach(track => track.stop());
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [facingMode]);
+
+  // --- 2. SCANNING LOGIC (Runs every 100ms) ---
+  const scanFrame = () => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+
+    if (video && canvas && video.readyState === video.HAVE_ENOUGH_DATA) {
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+      // Sync Canvas size to Video size
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      // Draw current video frame to canvas
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Get Image Data
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      
+      // Decode QR
+      const code = jsQR(imageData.data, imageData.width, imageData.height, {
+        inversionAttempts: "dontInvert",
+      });
+
+      if (code && code.data) {
+        handleScan(code.data);
+      }
+    }
+  };
+
   const handleScan = (rawUid) => {
     if (lockScan.current || !teachers || !rawUid) return;
-
     const uid = rawUid.trim(); 
 
     if (teachers[uid]) {
       lockScan.current = true;
       const now = new Date();
-
       const year = now.getFullYear();
       const month = String(now.getMonth() + 1).padStart(2, '0');
       const day = String(now.getDate()).padStart(2, '0');
@@ -144,45 +191,45 @@ function QRScannerPage() {
         .then(() => {
           setScannedName(teachers[uid].name);
           setScanResult('success');
-          
           setTimeout(() => {
             setScanResult(null);
             setScannedName('');
             lockScan.current = false;
           }, 3000);
         });
-
     } else {
       lockScan.current = true;
       setScanResult('error');
       setDebugScannedCode(uid); 
+      // Auto reset error for scanner quickly
+      setTimeout(() => {
+        setScanResult(null);
+        setDebugScannedCode('');
+        lockScan.current = false;
+      }, 3000);
     }
   };
 
-  const handleFileUpload = async (e) => {
+  const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
-    if (!('BarcodeDetector' in window)) {
-      alert("Your browser does not support image scanning. Please use Chrome on Android or Safari on iOS.");
-      return;
-    }
-
-    try {
-      const barcodeDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
-      const imageBitmap = await createImageBitmap(file);
-      const barcodes = await barcodeDetector.detect(imageBitmap);
-      
-      if (barcodes.length > 0) {
-        handleScan(barcodes[0].rawValue);
-      } else {
-        alert("No QR Code found in this image.");
-      }
-    } catch (err) {
-      console.error(err);
-      alert("Failed to read image.");
-    }
-    
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            context.drawImage(img, 0, 0);
+            const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(imageData.data, imageData.width, imageData.height);
+            if (code) handleScan(code.data);
+            else alert("No QR Code found.");
+        };
+        img.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
     e.target.value = null;
   };
 
@@ -190,19 +237,17 @@ function QRScannerPage() {
     setScanResult(null);
     setDebugScannedCode('');
     lockScan.current = false;
-    setCameraKey(prev => prev + 1); 
   };
 
   const toggleCamera = () => {
     setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
-    setCameraKey(prev => prev + 1);
   };
 
   if (!teachers) {
     return (
       <div className="vh-100 bg-dark d-flex flex-column align-items-center justify-content-center text-white">
         <div className="spinner-border text-primary mb-3"></div>
-        <h3>Loading Database...</h3>
+        <h3>Loading System...</h3>
       </div>
     );
   }
@@ -213,19 +258,9 @@ function QRScannerPage() {
       <div className="position-absolute top-0 w-100 p-3 d-flex justify-content-between align-items-center bg-black bg-opacity-50" style={{zIndex: 10}}>
         <h4 className="m-0 fw-bold d-none d-sm-block">📷 Kiosk</h4>
         <div className="d-flex gap-2">
-            <input 
-              type="file" 
-              ref={fileInputRef} 
-              style={{display:'none'}} 
-              accept="image/*" 
-              onChange={handleFileUpload} 
-            />
-            <button className="btn btn-warning btn-sm fw-bold shadow-sm" onClick={() => fileInputRef.current.click()}>
-                📁 Upload QR
-            </button>
-            <button className="btn btn-outline-light btn-sm" onClick={toggleCamera}>
-                🔄 Flip Cam
-            </button>
+            <input type="file" ref={fileInputRef} style={{display:'none'}} accept="image/*" onChange={handleFileUpload} />
+            <button className="btn btn-warning btn-sm fw-bold shadow-sm" onClick={() => fileInputRef.current.click()}>📁 Upload</button>
+            <button className="btn btn-outline-light btn-sm" onClick={toggleCamera}>🔄 Flip</button>
         </div>
       </div>
 
@@ -240,7 +275,7 @@ function QRScannerPage() {
       {scanResult === 'error' && (
         <div className="position-absolute w-100 h-100 d-flex flex-column justify-content-center align-items-center bg-danger p-4" style={{zIndex: 20}}>
           <h1 className="fw-bold display-1 mb-2">⚠️</h1>
-          <h2 className="fw-bold">Invalid QR Code</h2>
+          <h2 className="fw-bold">Invalid QR</h2>
           <div className="bg-black p-3 rounded mt-3 text-center w-100 shadow" style={{maxWidth: '500px', border: '2px solid yellow'}}>
             <h5 className="text-warning mb-0">READING:</h5>
             <h3 className="font-monospace text-white">{debugScannedCode}</h3>
@@ -249,27 +284,29 @@ function QRScannerPage() {
         </div>
       )}
 
-      <div className="position-relative shadow-lg" style={{ width: '100%', maxWidth: '500px', aspectRatio: '1/1', borderRadius: '30px', overflow: 'hidden', border: '8px solid #333' }}>
-        <QrReader
-          key={cameraKey}
-          onResult={(res) => { if (res) handleScan(res.text); }}
-          constraints={{ facingMode: facingMode, aspectRatio: 1 }}
-          videoStyle={{ objectFit: 'cover' }} 
-          style={{ width: '100%', height: '100%' }}
+      {/* VIDEO SCANNER */}
+      <div className="position-relative shadow-lg" style={{ width: '100%', maxWidth: '500px', aspectRatio: '1/1', borderRadius: '30px', overflow: 'hidden', border: '8px solid #333', background:'#000' }}>
+        <video 
+            ref={videoRef} 
+            muted 
+            playsInline
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
         />
+        {/* Hidden Canvas is used by jsQR to read the video frames */}
+        <canvas ref={canvasRef} style={{ display: 'none' }} />
+        
         {!scanResult && (
-            <div className="position-absolute w-100 bg-danger opacity-50" style={{height: '2px', top: '50%', boxShadow: '0 0 10px red'}}></div>
+            <div className="position-absolute w-100 bg-danger opacity-50" style={{height: '2px', top: '50%', boxShadow: '0 0 10px red', pointerEvents: 'none'}}></div>
         )}
       </div>
 
       <div className="mt-4 text-center opacity-50">
-        <p>Current: {facingMode === 'user' ? 'Front Camera' : 'Back Camera'}</p>
+        <p>Mode: {facingMode === 'user' ? 'Front Camera' : 'Back Camera'}</p>
         <small>{Object.keys(teachers).length} Teachers Loaded</small>
       </div>
     </div>
   );
 }
-
 
 // ==========================================
 //  COMPONENT 2: ADMIN DASHBOARD (Main App)
@@ -288,11 +325,9 @@ function AdminDashboard() {
   const [terminalLog, setTerminalLog] = useState('System Initialized...');
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   
-  // MODALS
   const [viewingStaff, setViewingStaff] = useState(null);
   const [showQRGen, setShowQRGen] = useState(null); 
 
-  // TIMETABLE
   const [selectedTeacherId, setSelectedTeacherId] = useState('');
   const [selectedDay, setSelectedDay] = useState('Monday');
   const [assignSubject, setAssignSubject] = useState('');
@@ -300,7 +335,6 @@ function AdminDashboard() {
   const [endTime, setEndTime] = useState('');
   const [editingKey, setEditingKey] = useState(null);
 
-  // ANALYTICS & DATE
   const [analyticsMode, setAnalyticsMode] = useState('monthly'); 
   const [selectedWeek, setSelectedWeek] = useState(1);
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().substring(0, 7));
@@ -326,15 +360,35 @@ function AdminDashboard() {
     if(times.length < 1) return { first: '--:--', last: '--:--', hours: 0 };
     const first = times[0];
     const last = times.length > 1 ? times[times.length-1] : '--:--';
-    
-    // Simple diff
     const [h1, m1] = first.split(':').map(Number);
     const [h2, m2] = last.split(':').map(Number);
     const date1 = new Date(0, 0, 0, h1, m1, 0);
     const date2 = new Date(0, 0, 0, h2, m2, 0);
     const diff = (date2 - date1) / (1000 * 60 * 60);
-    
     return { first, last, hours: diff > 0 ? diff : 0 };
+  };
+
+  const downloadQR = () => {
+    const svg = document.getElementById("qr-code-svg");
+    if (!svg) { alert("Error: QR Code not found"); return; }
+    const svgData = new XMLSerializer().serializeToString(svg);
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    const img = new Image();
+    img.onload = () => {
+      canvas.width = img.width + 40; 
+      canvas.height = img.height + 40;
+      ctx.fillStyle = "#FFFFFF";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 20, 20);
+      const pngFile = canvas.toDataURL("image/png");
+      const downloadLink = document.createElement("a");
+      const safeName = teachers[showQRGen]?.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+      downloadLink.download = `${safeName}_qr.png`;
+      downloadLink.href = pngFile;
+      downloadLink.click();
+    };
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgData);
   };
 
   useEffect(() => { onAuthStateChanged(auth, setUser); }, []);
@@ -434,10 +488,7 @@ function AdminDashboard() {
           <button className={`nav-link-custom mb-3 ${activeTab === 'register' ? 'active-nav' : ''}`} onClick={() => setActiveTab('register')}>👤 Enrollment</button>
           <button className={`nav-link-custom mb-3 ${activeTab === 'timetable' ? 'active-nav' : ''}`} onClick={() => setActiveTab('timetable')}>📅 Timetable</button>
           <div className="mt-auto pt-4 border-top border-secondary text-start">
-            
-            {/* UPDATED KIOSK BUTTON - NOW USES HASH ROUTING */}
             <button className="btn btn-link text-info text-decoration-none w-100 text-start p-0 small mb-2" onClick={() => window.open('/#/qr', '_blank')}>📷 Open Kiosk Mode</button>
-            
             <button className="btn btn-link text-warning text-decoration-none w-100 text-start p-0 small mb-2" onClick={resetDay}>Reset Date</button>
             <button className="btn btn-link text-danger text-decoration-none w-100 text-start p-0 small" onClick={() => signOut(auth)}>Sign Out</button>
           </div>
@@ -477,17 +528,10 @@ function AdminDashboard() {
                             list.push({ uid, name: teachers[uid].name, subject: daySch[key].subject, time: timeVal, start: timeVal.split(' - ')[0] });
                           });
                         });
-                        
-                        // Sort by start time
                         list.sort((a, b) => a.start.localeCompare(b.start));
 
                         if(list.length === 0) return <tr><td colSpan="6" className="py-5 text-muted small">No schedules found.</td></tr>;
 
-                        // ------------------------------------------------
-                        // PRE-CALCULATE ALL ATTENDANCE FOR THE LIST HERE
-                        // ------------------------------------------------
-                        
-                        // 1. Gather all logs relevant to the visible teachers
                         const relevantLogs = {}; 
                         list.forEach(item => {
                             if(attendance[item.uid]) {
@@ -495,21 +539,15 @@ function AdminDashboard() {
                             }
                         });
 
-                        // 2. Map the data using smart processor
                         const finalRows = list.map((item) => {
-                            // Find all schedules for THIS teacher for THIS day
                             const teacherSchedules = [];
                             const daySch = teachers[item.uid].timetable?.[currentDayName] || {};
                             Object.keys(daySch).forEach(k => {
                                 teacherSchedules.push({ ...daySch[k], id: k });
                             });
-                            // Sort them
                             teacherSchedules.sort((a,b) => a.time.localeCompare(b.time));
 
-                            // Process logs for this teacher
                             const processedStats = processDailyScans(teacherSchedules, attendance[item.uid]);
-
-                            // Find the specific result for *this* row (matching subject & time)
                             const myStatIndex = teacherSchedules.findIndex(s => s.subject === item.subject && s.time === item.time);
                             const result = processedStats[myStatIndex] || { checkin: '--:--', checkout: '--:--', status: 'missing' };
 
@@ -717,10 +755,11 @@ function AdminDashboard() {
             <div className="card shadow-lg p-4 w-100 mx-3 text-center bg-white" style={{ maxWidth: '400px', borderRadius: '24px' }}>
                 <h5 className="fw-bold mb-4">{teachers[showQRGen]?.name}</h5>
                 <div className="p-3 bg-white mx-auto border rounded shadow-sm" style={{width:'fit-content'}}>
-                    <QRCode value={showQRGen} size={200} />
+                    <QRCode id="qr-code-svg" value={showQRGen} size={200} />
                 </div>
                 <p className="text-muted small mt-3">Teacher ID: {showQRGen}</p>
-                <button className="btn btn-primary w-100 mt-2 fw-bold" style={{borderRadius: '12px'}} onClick={() => setShowQRGen(null)}>Done</button>
+                <button className="btn btn-success w-100 mt-2 fw-bold" style={{borderRadius: '12px'}} onClick={downloadQR}>Download PNG</button>
+                <button className="btn btn-light w-100 mt-2 fw-bold text-muted" style={{borderRadius: '12px'}} onClick={() => setShowQRGen(null)}>Close</button>
             </div>
         </div>
       )}
@@ -732,8 +771,6 @@ function AdminDashboard() {
 //  MAIN APP COMPONENT (ROUTER)
 // ==========================================
 function App() {
-  // ROUTING FIX: USE HASH ROUTING FOR GITHUB PAGES
-  // This allows http://iqie7.github.io/repo-name/#/qr to work
   if (window.location.hash === '#/qr') {
     return <QRScannerPage />;
   }
