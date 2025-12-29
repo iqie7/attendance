@@ -9,7 +9,7 @@ import QRCode from 'react-qr-code';
 // ==========================================
 //  GLOBAL CONFIGURATION
 // ==========================================
-const GRACE_PERIOD_MINUTES = 5; 
+const GRACE_PERIOD_MINUTES = 2; // Grace period (Early/Late buffer)
 
 /* ---------------- FIREBASE CONFIG ---------------- */
 const firebaseConfig = {
@@ -114,7 +114,7 @@ function QRScannerPage() {
   const [cameraKey, setCameraKey] = useState(0); 
   const [facingMode, setFacingMode] = useState('environment'); 
   const lockScan = useRef(false);
-  const fileInputRef = useRef(null); // Ref for file upload
+  const fileInputRef = useRef(null); 
 
   useEffect(() => {
     onValue(ref(db, 'teachers'), s => {
@@ -133,7 +133,6 @@ function QRScannerPage() {
       lockScan.current = true;
       const now = new Date();
 
-      // FIXED TIMEZONE (Malaysia Local)
       const year = now.getFullYear();
       const month = String(now.getMonth() + 1).padStart(2, '0');
       const day = String(now.getDate()).padStart(2, '0');
@@ -160,7 +159,6 @@ function QRScannerPage() {
     }
   };
 
-  // --- NEW: HANDLE FILE UPLOAD SCAN ---
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -185,7 +183,6 @@ function QRScannerPage() {
       alert("Failed to read image.");
     }
     
-    // Clear input so same file can be selected again
     e.target.value = null;
   };
 
@@ -213,11 +210,9 @@ function QRScannerPage() {
   return (
     <div className="vh-100 bg-dark d-flex flex-column align-items-center justify-content-center text-white position-relative overflow-hidden">
       
-      {/* HEADER WITH UPLOAD BUTTON */}
       <div className="position-absolute top-0 w-100 p-3 d-flex justify-content-between align-items-center bg-black bg-opacity-50" style={{zIndex: 10}}>
         <h4 className="m-0 fw-bold d-none d-sm-block">📷 Kiosk</h4>
         <div className="d-flex gap-2">
-            {/* Hidden Input */}
             <input 
               type="file" 
               ref={fileInputRef} 
@@ -225,18 +220,15 @@ function QRScannerPage() {
               accept="image/*" 
               onChange={handleFileUpload} 
             />
-            {/* Upload Button */}
             <button className="btn btn-warning btn-sm fw-bold shadow-sm" onClick={() => fileInputRef.current.click()}>
                 📁 Upload QR
             </button>
-            {/* Flip Button */}
             <button className="btn btn-outline-light btn-sm" onClick={toggleCamera}>
                 🔄 Flip Cam
             </button>
         </div>
       </div>
 
-      {/* SUCCESS OVERLAY */}
       {scanResult === 'success' && (
         <div className="position-absolute w-100 h-100 d-flex flex-column justify-content-center align-items-center bg-success" style={{zIndex: 20}}>
           <h1 className="fw-bold display-1">✅</h1>
@@ -245,7 +237,6 @@ function QRScannerPage() {
         </div>
       )}
 
-      {/* ERROR OVERLAY */}
       {scanResult === 'error' && (
         <div className="position-absolute w-100 h-100 d-flex flex-column justify-content-center align-items-center bg-danger p-4" style={{zIndex: 20}}>
           <h1 className="fw-bold display-1 mb-2">⚠️</h1>
@@ -258,7 +249,6 @@ function QRScannerPage() {
         </div>
       )}
 
-      {/* CAMERA */}
       <div className="position-relative shadow-lg" style={{ width: '100%', maxWidth: '500px', aspectRatio: '1/1', borderRadius: '30px', overflow: 'hidden', border: '8px solid #333' }}>
         <QrReader
           key={cameraKey}
@@ -330,82 +320,21 @@ function AdminDashboard() {
     return Math.ceil(day / 7);
   };
 
-  const getDiffInHours = (checkin, checkout) => {
-    if (!checkin || !checkout || checkout === '--:--' || checkin === '--:--') return 0;
-    const [h1, m1, s1] = checkin.split(':').map(Number);
-    const [h2, m2, s2] = checkout.split(':').map(Number);
-    const date1 = new Date(0, 0, 0, h1, m1, s1 || 0);
-    const date2 = new Date(0, 0, 0, h2, m2, s2 || 0);
-    const diff = (date2 - date1) / (1000 * 60 * 60);
-    return diff > 0 ? diff : 0;
-  };
-
-  // -------------------------------------------------------------
-  // LOGIC: USES GLOBAL GRACE_PERIOD_MINUTES VARIABLE
-  // -------------------------------------------------------------
-  const getAttendanceForClass = (scheduleTimeStr, userLogs) => {
-    if (!scheduleTimeStr || !userLogs) return { checkin: '--:--', checkout: '--:--', status: 'missing' };
-    
-    const [startStr, endStr] = scheduleTimeStr.split(' - ');
-    const [startH, startM] = startStr.split(':').map(Number);
-    const [endH, endM] = endStr.split(':').map(Number);
-    const startMins = startH * 60 + startM;
-    const endMins = endH * 60 + endM;
-    
-    // USE GLOBAL VARIABLE
-    const validStart = startMins - GRACE_PERIOD_MINUTES; 
-    const validEnd = endMins + GRACE_PERIOD_MINUTES; 
-
-    // Filter Logs
-    const rawScans = Object.values(userLogs)
-      .map(log => log.time) 
-      .filter(time => {
-        if(!time) return false;
-        const [h, m] = time.split(':').map(Number);
-        const logMins = h * 60 + m;
-        return logMins >= validStart && logMins <= validEnd;
-      })
-      .sort(); 
-
-    if (rawScans.length === 0) return { checkin: '--:--', checkout: '--:--', status: 'missing' };
-
-    const uniqueScans = rawScans.reduce((acc, currentTime) => {
-        if (acc.length === 0) return [currentTime]; 
-        const lastTime = acc[acc.length - 1];
-        if (currentTime !== lastTime) acc.push(currentTime);
-        return acc;
-    }, []);
-
-    const checkinTime = uniqueScans[0];
-    const checkoutTime = uniqueScans.length > 1 ? uniqueScans[uniqueScans.length - 1] : '--:--';
-
-    // STATUS CHECK
-    const [ch, cm] = checkinTime.split(':').map(Number);
-    const checkinMins = ch * 60 + cm;
-    
-    // USE GLOBAL VARIABLE
-    const lateThreshold = startMins + GRACE_PERIOD_MINUTES;
-
-    let finalStatus = 'present';
-    if (checkinMins > lateThreshold) {
-        finalStatus = 'late';
-    }
-
-    return { 
-      checkin: checkinTime, 
-      checkout: checkoutTime, 
-      status: finalStatus 
-    };
-  };
-
   const calculateDailyHoursFromLogs = (dayLogs) => {
     if(!dayLogs) return { first: '--:--', last: '--:--', hours: 0 };
     const times = Object.values(dayLogs).map(l => l.time).sort();
     if(times.length < 1) return { first: '--:--', last: '--:--', hours: 0 };
     const first = times[0];
     const last = times.length > 1 ? times[times.length-1] : '--:--';
-    const hours = getDiffInHours(first, last);
-    return { first, last, hours };
+    
+    // Simple diff
+    const [h1, m1] = first.split(':').map(Number);
+    const [h2, m2] = last.split(':').map(Number);
+    const date1 = new Date(0, 0, 0, h1, m1, 0);
+    const date2 = new Date(0, 0, 0, h2, m2, 0);
+    const diff = (date2 - date1) / (1000 * 60 * 60);
+    
+    return { first, last, hours: diff > 0 ? diff : 0 };
   };
 
   useEffect(() => { onAuthStateChanged(auth, setUser); }, []);
@@ -505,7 +434,10 @@ function AdminDashboard() {
           <button className={`nav-link-custom mb-3 ${activeTab === 'register' ? 'active-nav' : ''}`} onClick={() => setActiveTab('register')}>👤 Enrollment</button>
           <button className={`nav-link-custom mb-3 ${activeTab === 'timetable' ? 'active-nav' : ''}`} onClick={() => setActiveTab('timetable')}>📅 Timetable</button>
           <div className="mt-auto pt-4 border-top border-secondary text-start">
-            <button className="btn btn-link text-info text-decoration-none w-100 text-start p-0 small mb-2" onClick={() => window.open('/qr', '_blank')}>📷 Open Kiosk Mode</button>
+            
+            {/* UPDATED KIOSK BUTTON - NOW USES HASH ROUTING */}
+            <button className="btn btn-link text-info text-decoration-none w-100 text-start p-0 small mb-2" onClick={() => window.open('/#/qr', '_blank')}>📷 Open Kiosk Mode</button>
+            
             <button className="btn btn-link text-warning text-decoration-none w-100 text-start p-0 small mb-2" onClick={resetDay}>Reset Date</button>
             <button className="btn btn-link text-danger text-decoration-none w-100 text-start p-0 small" onClick={() => signOut(auth)}>Sign Out</button>
           </div>
@@ -800,8 +732,9 @@ function AdminDashboard() {
 //  MAIN APP COMPONENT (ROUTER)
 // ==========================================
 function App() {
-  const path = window.location.pathname;
-  if (path === '/qr' || path === '/attendance/qr') {
+  // ROUTING FIX: USE HASH ROUTING FOR GITHUB PAGES
+  // This allows http://iqie7.github.io/repo-name/#/qr to work
+  if (window.location.hash === '#/qr') {
     return <QRScannerPage />;
   }
   return <AdminDashboard />;
