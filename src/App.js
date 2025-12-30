@@ -467,6 +467,15 @@ function AdminDashboard() {
     return (
       <div className="vh-100 d-flex justify-content-center align-items-center" style={{ background: '#0f172a' }}>
         <div className="card p-5 shadow-lg border-0 w-100 mx-3 text-center" style={{ maxWidth: 420, borderRadius: '24px' }}>
+          
+          {/* LOGO IMAGE - Centered and using PUBLIC_URL */}
+          <img 
+            src={process.env.PUBLIC_URL + "/logo512.jpg"} 
+            alt="EduTrack Logo" 
+            className="mb-4 shadow-sm d-block mx-auto"
+            style={{ width: '120px', height: '120px', borderRadius: '50%', objectFit: 'cover' }} 
+          />
+
           <h3 className="fw-bold text-dark mb-4">EduTrack Pro</h3>
           <form onSubmit={handleLogin}>
             <input type="text" className="form-control bg-light border-0 mb-3 py-2" placeholder="Admin ID" onChange={e => setEmail(e.target.value)} required />
