@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
-import { getDatabase, ref, onValue, set, remove, push } from 'firebase/database';
+import { getDatabase, ref, onValue, set, remove, push, update } from 'firebase/database';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import QRCode from 'react-qr-code'; 
 import jsQR from 'jsqr'; 
@@ -64,27 +64,44 @@ const processDailyScans = (schedules, rawLogs) => {
     if (bestMatchIndex !== -1) processedData[bestMatchIndex].logs.push(scanTime);
   });
 
+  // --- GET CURRENT TIME FOR STATUS CHECKS ---
+  const now = new Date();
+  const currentTotalMins = now.getHours() * 60 + now.getMinutes();
+
   return processedData.map((data, index) => {
     const sch = schedules[index];
-    const [startStr] = sch.time.split(' - ');
+    const [startStr, endStr] = sch.time.split(' - ');
     const [sh, sm] = startStr.split(':').map(Number);
+    const [eh, em] = endStr.split(':').map(Number);
     const startMins = sh * 60 + sm;
+    const endMins = eh * 60 + em;
+
     if (data.logs.length === 0) return { checkin: '--:--', checkout: '--:--', status: 'missing' };
+    
     const uniqueLogs = [...new Set(data.logs)];
     const checkin = uniqueLogs[0];
     const checkout = uniqueLogs.length > 1 ? uniqueLogs[uniqueLogs.length - 1] : '--:--';
+
     const [ch, cm] = checkin.split(':').map(Number);
     const checkinMins = ch * 60 + cm;
     const lateThreshold = startMins + GRACE_PERIOD_MINUTES; 
+    
     let status = 'present';
+
+    // 1. Check Late
     if (checkinMins > lateThreshold) status = 'late';
+
+    // 2. Check "No Checkout" (Incomplete)
+    if (checkout === '--:--' && currentTotalMins > (endMins + GRACE_PERIOD_MINUTES)) {
+        status = 'incomplete';
+    }
+
     return { checkin, checkout, status };
   });
 };
 
 // ==========================================
 //  COMPONENT 1: DEDICATED QR SCANNER (KIOSK)
-//  (FIXED: USES INTERVAL TIMER FOR STABILITY)
 // ==========================================
 function QRScannerPage() {
   const [scanResult, setScanResult] = useState(null); 
@@ -92,10 +109,9 @@ function QRScannerPage() {
   const [debugScannedCode, setDebugScannedCode] = useState('');
   const [teachers, setTeachers] = useState(null);
   
-  // REFS
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const [facingMode, setFacingMode] = useState('user'); // Default Front Camera
+  const [facingMode, setFacingMode] = useState('user'); 
   const lockScan = useRef(false);
   const fileInputRef = useRef(null); 
 
@@ -106,7 +122,6 @@ function QRScannerPage() {
     });
   }, []);
 
-  // --- 1. START CAMERA ---
   useEffect(() => {
     let stream = null;
     let intervalId = null;
@@ -116,7 +131,7 @@ function QRScannerPage() {
         const constraints = { 
             video: { 
                 facingMode: facingMode,
-                width: { ideal: 1280 }, // Try higher resolution for clarity
+                width: { ideal: 1280 }, 
                 height: { ideal: 720 }
             } 
         };
@@ -127,7 +142,6 @@ function QRScannerPage() {
           videoRef.current.setAttribute("playsinline", true); 
           await videoRef.current.play();
           
-          // Start Scanning Loop (Every 100ms = 10 times a second)
           intervalId = setInterval(scanFrame, 100);
         }
       } catch (err) {
@@ -144,25 +158,16 @@ function QRScannerPage() {
     };
   }, [facingMode]);
 
-  // --- 2. SCANNING LOGIC (Runs every 100ms) ---
   const scanFrame = () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
 
     if (video && canvas && video.readyState === video.HAVE_ENOUGH_DATA) {
       const ctx = canvas.getContext("2d", { willReadFrequently: true });
-
-      // Sync Canvas size to Video size
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
-
-      // Draw current video frame to canvas
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-      // Get Image Data
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      
-      // Decode QR
       const code = jsQR(imageData.data, imageData.width, imageData.height, {
         inversionAttempts: "dontInvert",
       });
@@ -201,7 +206,6 @@ function QRScannerPage() {
       lockScan.current = true;
       setScanResult('error');
       setDebugScannedCode(uid); 
-      // Auto reset error for scanner quickly
       setTimeout(() => {
         setScanResult(null);
         setDebugScannedCode('');
@@ -254,7 +258,6 @@ function QRScannerPage() {
 
   return (
     <div className="vh-100 bg-dark d-flex flex-column align-items-center justify-content-center text-white position-relative overflow-hidden">
-      
       <div className="position-absolute top-0 w-100 p-3 d-flex justify-content-between align-items-center bg-black bg-opacity-50" style={{zIndex: 10}}>
         <h4 className="m-0 fw-bold d-none d-sm-block">📷 Kiosk</h4>
         <div className="d-flex gap-2">
@@ -284,7 +287,6 @@ function QRScannerPage() {
         </div>
       )}
 
-      {/* VIDEO SCANNER */}
       <div className="position-relative shadow-lg" style={{ width: '100%', maxWidth: '500px', aspectRatio: '1/1', borderRadius: '30px', overflow: 'hidden', border: '8px solid #333', background:'#000' }}>
         <video 
             ref={videoRef} 
@@ -292,7 +294,6 @@ function QRScannerPage() {
             playsInline
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
         />
-        {/* Hidden Canvas is used by jsQR to read the video frames */}
         <canvas ref={canvasRef} style={{ display: 'none' }} />
         
         {!scanResult && (
@@ -340,6 +341,15 @@ function AdminDashboard() {
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().substring(0, 7));
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const dateInputRef = useRef(null);
+
+  // --- HEARTBEAT TIMER (Auto-Refresh Status) ---
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => {
+        setTick(t => t + 1); 
+    }, 30000); 
+    return () => clearInterval(timer);
+  }, []);
 
   const currentDayName = new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(new Date(selectedDate));
 
@@ -391,6 +401,24 @@ function AdminDashboard() {
     img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgData);
   };
 
+  // --- DELETE INDIVIDUAL TEACHER (WIPES HISTORY TOO) ---
+  const handleDeleteTeacher = (uid, name) => {
+    if(window.confirm(`⚠️ IMPORTANT:\n\nDeleting ${name} will PERMANENTLY REMOVE:\n1. Their Profile\n2. ALL their past attendance records (hours will be reset).\n\nAre you sure you want to proceed?`)) {
+        const updates = {};
+        updates[`teachers/${uid}`] = null;
+        if(allData) {
+            Object.keys(allData).forEach(date => {
+                if(allData[date][uid]) {
+                    updates[`attendance_logs/${date}/${uid}`] = null;
+                }
+            });
+        }
+        update(ref(db), updates)
+            .then(() => alert(`${name} and all their history has been wiped.`))
+            .catch(err => alert("Error: " + err.message));
+    }
+  };
+
   useEffect(() => { onAuthStateChanged(auth, setUser); }, []);
 
   useEffect(() => {
@@ -415,7 +443,7 @@ function AdminDashboard() {
   const handleUpdateTimetable = (e) => {
     e.preventDefault();
     if (!selectedTeacherId || !startTime || !endTime || !assignSubject) return;
-    if (endTime <= startTime) { alert("Invalid Time Range"); return; }
+    if (endTime <= startTime) { alert("Invalid Time Range: End Time must be after Start Time"); return; }
     const path = `teachers/${selectedTeacherId}/timetable/${selectedDay}/${editingKey || push(ref(db)).key}`;
     set(ref(db, path), { subject: assignSubject, time: `${startTime} - ${endTime}` }).then(() => {
       alert("Timetable Saved"); setAssignSubject(''); setStartTime(''); setEndTime(''); setEditingKey(null);
@@ -488,7 +516,10 @@ function AdminDashboard() {
           <button className={`nav-link-custom mb-3 ${activeTab === 'register' ? 'active-nav' : ''}`} onClick={() => setActiveTab('register')}>👤 Enrollment</button>
           <button className={`nav-link-custom mb-3 ${activeTab === 'timetable' ? 'active-nav' : ''}`} onClick={() => setActiveTab('timetable')}>📅 Timetable</button>
           <div className="mt-auto pt-4 border-top border-secondary text-start">
-            <button className="btn btn-link text-info text-decoration-none w-100 text-start p-0 small mb-2" onClick={() => window.open('/#/qr', '_blank')}>📷 Open Kiosk Mode</button>
+            
+            {/* UPDATED KIOSK BUTTON WITH ATTENDANCE PATH */}
+            <button className="btn btn-link text-info text-decoration-none w-100 text-start p-0 small mb-2" onClick={() => window.open('/attendance/#/qr', '_blank')}>📷 Open Kiosk Mode</button>
+            
             <button className="btn btn-link text-warning text-decoration-none w-100 text-start p-0 small mb-2" onClick={resetDay}>Reset Date</button>
             <button className="btn btn-link text-danger text-decoration-none w-100 text-start p-0 small" onClick={() => signOut(auth)}>Sign Out</button>
           </div>
@@ -562,9 +593,10 @@ function AdminDashboard() {
                                     <span className={`status-pill status-pill-feed ${
                                         result.status === 'present' ? 'bg-success text-white' : 
                                         result.status === 'late' ? 'bg-warning text-dark' : 
+                                        result.status === 'incomplete' ? 'bg-danger text-white' : 
                                         'bg-danger text-white'
                                     }`}>
-                                      {result.status.toUpperCase()}
+                                      {result.status === 'incomplete' ? 'NO CHECKOUT' : result.status.toUpperCase()}
                                     </span>
                                   </td>
                                 </tr>
@@ -595,7 +627,7 @@ function AdminDashboard() {
                     </div>
                 </div>
                 <table className="table align-middle text-start">
-                    <thead className="table-light"><tr><th>Teacher Name (Click 📷 for Code)</th><th className="text-center">Total Hours</th></tr></thead>
+                    <thead className="table-light"><tr><th>Teacher Name (Click 📷 for Code)</th><th className="text-center">Total Hours</th><th className="text-end pe-3">Actions</th></tr></thead>
                     <tbody>
                       {Object.keys(teachers).map(uid => {
                         let hrs = 0;
@@ -614,6 +646,9 @@ function AdminDashboard() {
                                 </div>
                             </td>
                             <td className="text-center fw-bold text-primary">{hrs.toFixed(2)} Hrs</td>
+                            <td className="text-end pe-3">
+                                <button className="btn btn-outline-danger btn-sm" onClick={() => handleDeleteTeacher(uid, teachers[uid].name)}>🗑️ Delete</button>
+                            </td>
                           </tr>
                         );
                       })}
@@ -673,8 +708,38 @@ function AdminDashboard() {
                           <option value="Sejarah">Sejarah</option>
                         </select>
                     </div>
-                    <div className="col-6 text-start"><label className="small fw-bold">START TIME</label><input type="time" className="form-control border-0 bg-light" value={startTime} onChange={e => setStartTime(e.target.value)} required /></div>
-                    <div className="col-6 text-start"><label className="small fw-bold">END TIME</label><input type="time" className="form-control border-0 bg-light" value={endTime} onChange={e => setEndTime(e.target.value)} required /></div>
+                    {/* UPDATED TIME INPUTS WITH VALIDATION LOGIC */}
+                    <div className="col-6 text-start">
+                      <label className="small fw-bold">START TIME</label>
+                      <input 
+                        type="time" 
+                        className="form-control border-0 bg-light" 
+                        value={startTime} 
+                        onChange={e => {
+                            setStartTime(e.target.value);
+                            if(endTime && e.target.value >= endTime) setEndTime('');
+                        }} 
+                        required 
+                      />
+                    </div>
+                    <div className="col-6 text-start">
+                      <label className="small fw-bold">END TIME</label>
+                      <input 
+                        type="time" 
+                        className="form-control border-0 bg-light" 
+                        value={endTime} 
+                        min={startTime} 
+                        onChange={e => {
+                            if(startTime && e.target.value < startTime) {
+                                alert("End time cannot be earlier than start time.");
+                                setEndTime(''); 
+                            } else {
+                                setEndTime(e.target.value);
+                            }
+                        }} 
+                        required 
+                      />
+                    </div>
                   </div>
                   <button className="btn btn-primary w-100 py-2 fw-bold shadow mt-4">Save Timetable</button>
                   {editingKey && <button className="btn btn-link text-muted w-100 mt-2" onClick={() => { setEditingKey(null); setAssignSubject(''); setStartTime(''); setEndTime(''); }}>Cancel Edit</button>}
