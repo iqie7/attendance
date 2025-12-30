@@ -64,7 +64,6 @@ const processDailyScans = (schedules, rawLogs) => {
     if (bestMatchIndex !== -1) processedData[bestMatchIndex].logs.push(scanTime);
   });
 
-  // --- GET CURRENT TIME FOR STATUS CHECKS ---
   const now = new Date();
   const currentTotalMins = now.getHours() * 60 + now.getMinutes();
 
@@ -88,10 +87,8 @@ const processDailyScans = (schedules, rawLogs) => {
     
     let status = 'present';
 
-    // 1. Check Late
     if (checkinMins > lateThreshold) status = 'late';
 
-    // 2. Check "No Checkout" (Incomplete)
     if (checkout === '--:--' && currentTotalMins > (endMins + GRACE_PERIOD_MINUTES)) {
         status = 'incomplete';
     }
@@ -329,7 +326,7 @@ function AdminDashboard() {
   const [viewingStaff, setViewingStaff] = useState(null);
   const [showQRGen, setShowQRGen] = useState(null); 
 
-  // --- SUBJECTS STATE ---
+  // --- SUBJECTS STATE (Now stores Objects {id, name}) ---
   const [subjects, setSubjects] = useState([]);
   const [newSubject, setNewSubject] = useState("");
   const [isAddingSubject, setIsAddingSubject] = useState(false);
@@ -425,7 +422,7 @@ function AdminDashboard() {
 
   useEffect(() => { onAuthStateChanged(auth, setUser); }, []);
 
-  // --- FETCH SUBJECTS & OTHER DATA ---
+  // --- FETCH DATA (Including Subjects with Keys) ---
   useEffect(() => {
     if (!user) return;
     onValue(ref(db, 'teachers'), s => setTeachers(s.val() || {}));
@@ -435,15 +432,18 @@ function AdminDashboard() {
     onValue(ref(db, `attendance_logs/${selectedDate}`), s => setAttendance(s.val() || {}));
     onValue(ref(db, 'attendance_logs'), s => setAllData(s.val() || {}));
 
-    // NEW: FETCH SUBJECTS
+    // FETCH SUBJECTS AS OBJECTS {id, name}
     const subRef = ref(db, 'subjects');
     onValue(subRef, (snapshot) => {
         const data = snapshot.val();
         if (data) {
-            // Convert object to array values
-            setSubjects(Object.values(data));
+            const loadedSubjects = Object.keys(data).map(key => ({
+                id: key,
+                name: data[key]
+            }));
+            setSubjects(loadedSubjects);
         } else {
-            // Init Defaults if empty
+            // Default init
             const defaults = ["Bahasa Melayu", "Matematik", "Sains", "Bahasa Inggeris", "Sejarah"];
             defaults.forEach(sub => push(subRef, sub));
         }
@@ -459,12 +459,17 @@ function AdminDashboard() {
     set(ref(db, `teachers/${regUid}`), { name: regName }).then(() => { clearEnrollment(); setActiveTab('timetable'); });
   };
 
-  // --- ADD NEW SUBJECT FUNCTION ---
+  // --- SUBJECT MANAGEMENT ---
   const handleAddSubject = () => {
       if(!newSubject.trim()) return;
       push(ref(db, 'subjects'), newSubject.trim());
       setNewSubject("");
-      setIsAddingSubject(false);
+  };
+
+  const handleDeleteSubject = (id, name) => {
+      if(window.confirm(`Delete subject "${name}"?`)) {
+          remove(ref(db, `subjects/${id}`));
+      }
   };
 
   const handleUpdateTimetable = (e) => {
@@ -494,14 +499,12 @@ function AdminDashboard() {
     return (
       <div className="vh-100 d-flex justify-content-center align-items-center" style={{ background: '#0f172a' }}>
         <div className="card p-5 shadow-lg border-0 w-100 mx-3 text-center" style={{ maxWidth: 420, borderRadius: '24px' }}>
-          
           <img 
             src={process.env.PUBLIC_URL + "/logo512.jpg"} 
             alt="EduTrack Logo" 
             className="mb-4 shadow-sm d-block mx-auto"
             style={{ width: '120px', height: '120px', borderRadius: '50%', objectFit: 'cover' }} 
           />
-
           <h3 className="fw-bold text-dark mb-4">EduTrack Pro</h3>
           <form onSubmit={handleLogin}>
             <input type="text" className="form-control bg-light border-0 mb-3 py-2" placeholder="Admin ID" onChange={e => setEmail(e.target.value)} required />
@@ -551,7 +554,6 @@ function AdminDashboard() {
           <button className={`nav-link-custom mb-3 ${activeTab === 'register' ? 'active-nav' : ''}`} onClick={() => setActiveTab('register')}>👤 Enrollment</button>
           <button className={`nav-link-custom mb-3 ${activeTab === 'timetable' ? 'active-nav' : ''}`} onClick={() => setActiveTab('timetable')}>📅 Timetable</button>
           <div className="mt-auto pt-4 border-top border-secondary text-start">
-            
             <button className="btn btn-link text-info text-decoration-none w-100 text-start p-0 small mb-2" onClick={() => window.open('/attendance/#/qr', '_blank')}>📷 Open Kiosk Mode</button>
             <button className="btn btn-link text-warning text-decoration-none w-100 text-start p-0 small mb-2" onClick={resetDay}>Reset Date</button>
             <button className="btn btn-link text-danger text-decoration-none w-100 text-start p-0 small" onClick={() => signOut(auth)}>Sign Out</button>
@@ -737,27 +739,46 @@ function AdminDashboard() {
                     {/* NEW: DYNAMIC SUBJECT SELECTOR */}
                     <div className="col-12 text-start">
                         <label className="small fw-bold">ASSIGN SUBJECT</label>
-                        <div className="d-flex gap-2">
+                        <div className="d-flex gap-2 align-items-center">
                             <select className="form-select border-0 bg-light py-2" value={assignSubject} onChange={e => setAssignSubject(e.target.value)} required>
                               <option value="">-- Select Subject --</option>
                               {subjects.map((sub, idx) => (
-                                <option key={idx} value={sub}>{sub}</option>
+                                <option key={sub.id} value={sub.name}>{sub.name}</option>
                               ))}
                             </select>
                             <button type="button" className="btn btn-outline-secondary btn-sm" onClick={() => setIsAddingSubject(!isAddingSubject)}>
-                                {isAddingSubject ? '✕' : '+'}
+                                ⚙️
                             </button>
                         </div>
+                        
+                        {/* SUBJECT MANAGER PANEL */}
                         {isAddingSubject && (
-                            <div className="input-group mt-2">
-                                <input 
-                                    type="text" 
-                                    className="form-control form-control-sm" 
-                                    placeholder="Enter New Subject" 
-                                    value={newSubject}
-                                    onChange={(e) => setNewSubject(e.target.value)}
-                                />
-                                <button className="btn btn-success btn-sm" type="button" onClick={handleAddSubject}>Save</button>
+                            <div className="card mt-2 p-3 border-0 shadow-sm bg-light">
+                                <h6 className="small fw-bold text-muted mb-2">Manage Subjects</h6>
+                                <div className="d-flex flex-wrap gap-2 mb-3">
+                                    {subjects.map(sub => (
+                                        <span key={sub.id} className="badge bg-white text-dark border d-flex align-items-center px-2 py-1">
+                                            {sub.name}
+                                            <span 
+                                                className="ms-2 text-danger" 
+                                                style={{cursor:'pointer', fontWeight:'bold'}}
+                                                onClick={() => handleDeleteSubject(sub.id, sub.name)}
+                                            >
+                                                ×
+                                            </span>
+                                        </span>
+                                    ))}
+                                </div>
+                                <div className="input-group input-group-sm">
+                                    <input 
+                                        type="text" 
+                                        className="form-control" 
+                                        placeholder="Type new subject..." 
+                                        value={newSubject}
+                                        onChange={(e) => setNewSubject(e.target.value)}
+                                    />
+                                    <button className="btn btn-success" type="button" onClick={handleAddSubject}>Add</button>
+                                </div>
                             </div>
                         )}
                     </div>
