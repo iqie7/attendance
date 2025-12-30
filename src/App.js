@@ -64,6 +64,7 @@ const processDailyScans = (schedules, rawLogs) => {
     if (bestMatchIndex !== -1) processedData[bestMatchIndex].logs.push(scanTime);
   });
 
+  // --- GET CURRENT TIME FOR STATUS CHECKS ---
   const now = new Date();
   const currentTotalMins = now.getHours() * 60 + now.getMinutes();
 
@@ -87,8 +88,10 @@ const processDailyScans = (schedules, rawLogs) => {
     
     let status = 'present';
 
+    // 1. Check Late
     if (checkinMins > lateThreshold) status = 'late';
 
+    // 2. Check "No Checkout" (Incomplete)
     if (checkout === '--:--' && currentTotalMins > (endMins + GRACE_PERIOD_MINUTES)) {
         status = 'incomplete';
     }
@@ -326,6 +329,11 @@ function AdminDashboard() {
   const [viewingStaff, setViewingStaff] = useState(null);
   const [showQRGen, setShowQRGen] = useState(null); 
 
+  // --- SUBJECTS STATE ---
+  const [subjects, setSubjects] = useState([]);
+  const [newSubject, setNewSubject] = useState("");
+  const [isAddingSubject, setIsAddingSubject] = useState(false);
+
   const [selectedTeacherId, setSelectedTeacherId] = useState('');
   const [selectedDay, setSelectedDay] = useState('Monday');
   const [assignSubject, setAssignSubject] = useState('');
@@ -417,6 +425,7 @@ function AdminDashboard() {
 
   useEffect(() => { onAuthStateChanged(auth, setUser); }, []);
 
+  // --- FETCH SUBJECTS & OTHER DATA ---
   useEffect(() => {
     if (!user) return;
     onValue(ref(db, 'teachers'), s => setTeachers(s.val() || {}));
@@ -425,6 +434,20 @@ function AdminDashboard() {
     onValue(ref(db, 'config/scan_mode'), s => { setIsScanning(s.val() || false); });
     onValue(ref(db, `attendance_logs/${selectedDate}`), s => setAttendance(s.val() || {}));
     onValue(ref(db, 'attendance_logs'), s => setAllData(s.val() || {}));
+
+    // NEW: FETCH SUBJECTS
+    const subRef = ref(db, 'subjects');
+    onValue(subRef, (snapshot) => {
+        const data = snapshot.val();
+        if (data) {
+            // Convert object to array values
+            setSubjects(Object.values(data));
+        } else {
+            // Init Defaults if empty
+            const defaults = ["Bahasa Melayu", "Matematik", "Sains", "Bahasa Inggeris", "Sejarah"];
+            defaults.forEach(sub => push(subRef, sub));
+        }
+    });
   }, [user, selectedDate]);
 
   const handleLogin = e => { e.preventDefault(); signInWithEmailAndPassword(auth, email, password).catch(() => alert('Access Denied')); };
@@ -434,6 +457,14 @@ function AdminDashboard() {
     e.preventDefault();
     if (!regUid || !regName) return;
     set(ref(db, `teachers/${regUid}`), { name: regName }).then(() => { clearEnrollment(); setActiveTab('timetable'); });
+  };
+
+  // --- ADD NEW SUBJECT FUNCTION ---
+  const handleAddSubject = () => {
+      if(!newSubject.trim()) return;
+      push(ref(db, 'subjects'), newSubject.trim());
+      setNewSubject("");
+      setIsAddingSubject(false);
   };
 
   const handleUpdateTimetable = (e) => {
@@ -464,7 +495,6 @@ function AdminDashboard() {
       <div className="vh-100 d-flex justify-content-center align-items-center" style={{ background: '#0f172a' }}>
         <div className="card p-5 shadow-lg border-0 w-100 mx-3 text-center" style={{ maxWidth: 420, borderRadius: '24px' }}>
           
-          {/* LOGO IMAGE */}
           <img 
             src={process.env.PUBLIC_URL + "/logo512.jpg"} 
             alt="EduTrack Logo" 
@@ -522,9 +552,7 @@ function AdminDashboard() {
           <button className={`nav-link-custom mb-3 ${activeTab === 'timetable' ? 'active-nav' : ''}`} onClick={() => setActiveTab('timetable')}>📅 Timetable</button>
           <div className="mt-auto pt-4 border-top border-secondary text-start">
             
-            {/* KIOSK BUTTON */}
             <button className="btn btn-link text-info text-decoration-none w-100 text-start p-0 small mb-2" onClick={() => window.open('/attendance/#/qr', '_blank')}>📷 Open Kiosk Mode</button>
-            
             <button className="btn btn-link text-warning text-decoration-none w-100 text-start p-0 small mb-2" onClick={resetDay}>Reset Date</button>
             <button className="btn btn-link text-danger text-decoration-none w-100 text-start p-0 small" onClick={() => signOut(auth)}>Sign Out</button>
           </div>
@@ -705,16 +733,35 @@ function AdminDashboard() {
                           <option value="Thursday">Thursday</option><option value="Friday">Friday</option><option value="Saturday">Saturday</option><option value="Sunday">Sunday</option>
                         </select>
                     </div>
-                    <div className="col-12 text-start"><label className="small fw-bold">ASSIGN SUBJECT</label>
-                        <select className="form-select border-0 bg-light py-2" value={assignSubject} onChange={e => setAssignSubject(e.target.value)} required>
-                          <option value="">-- Select Subject --</option>
-                          <option value="Bahasa Melayu">Bahasa Melayu</option>
-                          <option value="Matematik">Matematik</option>
-                          <option value="Sains">Sains</option>
-                          <option value="Bahasa Inggeris">Bahasa Inggeris</option>
-                          <option value="Sejarah">Sejarah</option>
-                        </select>
+                    
+                    {/* NEW: DYNAMIC SUBJECT SELECTOR */}
+                    <div className="col-12 text-start">
+                        <label className="small fw-bold">ASSIGN SUBJECT</label>
+                        <div className="d-flex gap-2">
+                            <select className="form-select border-0 bg-light py-2" value={assignSubject} onChange={e => setAssignSubject(e.target.value)} required>
+                              <option value="">-- Select Subject --</option>
+                              {subjects.map((sub, idx) => (
+                                <option key={idx} value={sub}>{sub}</option>
+                              ))}
+                            </select>
+                            <button type="button" className="btn btn-outline-secondary btn-sm" onClick={() => setIsAddingSubject(!isAddingSubject)}>
+                                {isAddingSubject ? '✕' : '+'}
+                            </button>
+                        </div>
+                        {isAddingSubject && (
+                            <div className="input-group mt-2">
+                                <input 
+                                    type="text" 
+                                    className="form-control form-control-sm" 
+                                    placeholder="Enter New Subject" 
+                                    value={newSubject}
+                                    onChange={(e) => setNewSubject(e.target.value)}
+                                />
+                                <button className="btn btn-success btn-sm" type="button" onClick={handleAddSubject}>Save</button>
+                            </div>
+                        )}
                     </div>
+
                     {/* UPDATED TIME INPUTS WITH VALIDATION LOGIC */}
                     <div className="col-6 text-start">
                       <label className="small fw-bold">START TIME</label>
