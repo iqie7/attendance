@@ -326,7 +326,7 @@ function AdminDashboard() {
   const [viewingStaff, setViewingStaff] = useState(null);
   const [showQRGen, setShowQRGen] = useState(null); 
 
-  // --- SUBJECTS STATE (Now stores Objects {id, name}) ---
+  // --- SUBJECTS STATE ---
   const [subjects, setSubjects] = useState([]);
   const [newSubject, setNewSubject] = useState("");
   const [isAddingSubject, setIsAddingSubject] = useState(false);
@@ -422,7 +422,7 @@ function AdminDashboard() {
 
   useEffect(() => { onAuthStateChanged(auth, setUser); }, []);
 
-  // --- FETCH DATA (Including Subjects with Keys) ---
+  // --- FETCH DATA ---
   useEffect(() => {
     if (!user) return;
     onValue(ref(db, 'teachers'), s => setTeachers(s.val() || {}));
@@ -432,7 +432,6 @@ function AdminDashboard() {
     onValue(ref(db, `attendance_logs/${selectedDate}`), s => setAttendance(s.val() || {}));
     onValue(ref(db, 'attendance_logs'), s => setAllData(s.val() || {}));
 
-    // FETCH SUBJECTS AS OBJECTS {id, name}
     const subRef = ref(db, 'subjects');
     onValue(subRef, (snapshot) => {
         const data = snapshot.val();
@@ -443,7 +442,6 @@ function AdminDashboard() {
             }));
             setSubjects(loadedSubjects);
         } else {
-            // Default init
             const defaults = ["Bahasa Melayu", "Matematik", "Sains", "Bahasa Inggeris", "Sejarah"];
             defaults.forEach(sub => push(subRef, sub));
         }
@@ -554,6 +552,7 @@ function AdminDashboard() {
           <button className={`nav-link-custom mb-3 ${activeTab === 'register' ? 'active-nav' : ''}`} onClick={() => setActiveTab('register')}>👤 Enrollment</button>
           <button className={`nav-link-custom mb-3 ${activeTab === 'timetable' ? 'active-nav' : ''}`} onClick={() => setActiveTab('timetable')}>📅 Timetable</button>
           <div className="mt-auto pt-4 border-top border-secondary text-start">
+            
             <button className="btn btn-link text-info text-decoration-none w-100 text-start p-0 small mb-2" onClick={() => window.open('/attendance/#/qr', '_blank')}>📷 Open Kiosk Mode</button>
             <button className="btn btn-link text-warning text-decoration-none w-100 text-start p-0 small mb-2" onClick={resetDay}>Reset Date</button>
             <button className="btn btn-link text-danger text-decoration-none w-100 text-start p-0 small" onClick={() => signOut(auth)}>Sign Out</button>
@@ -820,26 +819,51 @@ function AdminDashboard() {
                   {editingKey && <button className="btn btn-link text-muted w-100 mt-2" onClick={() => { setEditingKey(null); setAssignSubject(''); setStartTime(''); setEndTime(''); }}>Cancel Edit</button>}
                 </form>
 
+                {/* --- ASSIGNED SCHEDULES (GROUPED BY DAY) --- */}
                 <div className="mt-5 text-start">
                   <h6 className="fw-bold text-muted small text-uppercase border-bottom pb-2">Assigned Schedules</h6>
                   <div style={{maxHeight:'400px', overflowY:'auto'}}>
-                  {Object.keys(teachers).map(uid => teachers[uid].timetable && (
-                    <div key={uid} className="mb-4 ps-3 border-start border-primary border-4">
-                      <div className="fw-bold mb-2 text-dark">{teachers[uid].name}</div>
-                      {Object.keys(teachers[uid].timetable).map(day => Object.keys(teachers[uid].timetable[day]).map(key => {
-                        const s = teachers[uid].timetable[day][key];
+                    {/* START NEW LOGIC: GROUP BY DAY */}
+                    {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map(day => {
+                        // 1. Collect all schedules for this day from all teachers
+                        const daySchedules = [];
+                        Object.keys(teachers).forEach(uid => {
+                            const teacher = teachers[uid];
+                            if(teacher.timetable && teacher.timetable[day]) {
+                                Object.keys(teacher.timetable[day]).forEach(key => {
+                                    daySchedules.push({
+                                        uid,
+                                        name: teacher.name,
+                                        key,
+                                        ...teacher.timetable[day][key]
+                                    });
+                                });
+                            }
+                        });
+
+                        // 2. If no schedules for this day, skip
+                        if(daySchedules.length === 0) return null;
+
+                        // 3. Sort by start time
+                        daySchedules.sort((a,b) => a.time.localeCompare(b.time));
+
+                        // 4. Render the group
                         return (
-                          <div key={key} className="d-flex justify-content-between align-items-center small py-2 border-bottom">
-                            <span><strong>{day.substring(0,3)}</strong>: {s.subject} ({s.time})</span>
-                            <div className="btn-group">
-                                <button className="btn btn-sm text-primary p-0 me-2" onClick={() => handleEditSchedule(uid, day, key, s)}>Edit</button>
-                                <button className="btn btn-sm text-danger p-0" onClick={() => handleDeleteSchedule(uid, day, key)}>Delete</button>
+                            <div key={day} className="mb-4 ps-3 border-start border-primary border-4">
+                                <div className="fw-bold mb-2 text-dark">{day}</div>
+                                {daySchedules.map(sch => (
+                                    <div key={sch.key} className="d-flex justify-content-between align-items-center small py-2 border-bottom">
+                                        <span><strong>{sch.name}</strong>: {sch.subject} ({sch.time})</span>
+                                        <div className="btn-group">
+                                            <button className="btn btn-sm text-primary p-0 me-2" onClick={() => handleEditSchedule(sch.uid, day, sch.key, sch)}>Edit</button>
+                                            <button className="btn btn-sm text-danger p-0" onClick={() => handleDeleteSchedule(sch.uid, day, sch.key)}>Delete</button>
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
-                          </div>
                         );
-                      }))}
-                    </div>
-                  ))}
+                    })}
+                    {/* END NEW LOGIC */}
                   </div>
                 </div>
               </div>
