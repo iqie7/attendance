@@ -64,6 +64,7 @@ const processDailyScans = (schedules, rawLogs) => {
     if (bestMatchIndex !== -1) processedData[bestMatchIndex].logs.push(scanTime);
   });
 
+  // --- GET CURRENT TIME FOR STATUS CHECKS ---
   const now = new Date();
   const currentTotalMins = now.getHours() * 60 + now.getMinutes();
 
@@ -87,8 +88,10 @@ const processDailyScans = (schedules, rawLogs) => {
     
     let status = 'present';
 
+    // 1. Check Late
     if (checkinMins > lateThreshold) status = 'late';
 
+    // 2. Check "No Checkout" (Incomplete)
     if (checkout === '--:--' && currentTotalMins > (endMins + GRACE_PERIOD_MINUTES)) {
         status = 'incomplete';
     }
@@ -326,7 +329,7 @@ function AdminDashboard() {
   const [viewingStaff, setViewingStaff] = useState(null);
   const [showQRGen, setShowQRGen] = useState(null); 
 
-  // --- SUBJECTS STATE ---
+  // --- SUBJECTS STATE (Now stores Objects {id, name}) ---
   const [subjects, setSubjects] = useState([]);
   const [newSubject, setNewSubject] = useState("");
   const [isAddingSubject, setIsAddingSubject] = useState(false);
@@ -403,6 +406,7 @@ function AdminDashboard() {
     img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgData);
   };
 
+  // --- DELETE INDIVIDUAL TEACHER (WIPES HISTORY TOO) ---
   const handleDeleteTeacher = (uid, name) => {
     if(window.confirm(`⚠️ IMPORTANT:\n\nDeleting ${name} will PERMANENTLY REMOVE:\n1. Their Profile\n2. ALL their past attendance records (hours will be reset).\n\nAre you sure you want to proceed?`)) {
         const updates = {};
@@ -420,9 +424,31 @@ function AdminDashboard() {
     }
   };
 
+  // --- NEW: RESET HOURS ONLY (KEEPS PROFILE) ---
+  const handleResetTeacherHours = (uid, name) => {
+      if(window.confirm(`Are you sure you want to RESET attendance hours for ${name}?\n\nThis will wipe their history logs but KEEP their profile.`)) {
+          const updates = {};
+          if(allData) {
+              Object.keys(allData).forEach(date => {
+                  if(allData[date][uid]) {
+                      updates[`attendance_logs/${date}/${uid}`] = null;
+                  }
+              });
+          }
+
+          if(Object.keys(updates).length > 0) {
+              update(ref(db), updates)
+                  .then(() => alert(`History for ${name} has been reset.`))
+                  .catch(err => alert("Error: " + err.message));
+          } else {
+              alert("No attendance records found to reset.");
+          }
+      }
+  };
+
   useEffect(() => { onAuthStateChanged(auth, setUser); }, []);
 
-  // --- FETCH DATA ---
+  // --- FETCH DATA (Including Subjects with Keys) ---
   useEffect(() => {
     if (!user) return;
     onValue(ref(db, 'teachers'), s => setTeachers(s.val() || {}));
@@ -432,6 +458,7 @@ function AdminDashboard() {
     onValue(ref(db, `attendance_logs/${selectedDate}`), s => setAttendance(s.val() || {}));
     onValue(ref(db, 'attendance_logs'), s => setAllData(s.val() || {}));
 
+    // FETCH SUBJECTS AS OBJECTS {id, name}
     const subRef = ref(db, 'subjects');
     onValue(subRef, (snapshot) => {
         const data = snapshot.val();
@@ -442,6 +469,7 @@ function AdminDashboard() {
             }));
             setSubjects(loadedSubjects);
         } else {
+            // Default init
             const defaults = ["Bahasa Melayu", "Matematik", "Sains", "Bahasa Inggeris", "Sejarah"];
             defaults.forEach(sub => push(subRef, sub));
         }
@@ -554,6 +582,7 @@ function AdminDashboard() {
           <div className="mt-auto pt-4 border-top border-secondary text-start">
             
             <button className="btn btn-link text-info text-decoration-none w-100 text-start p-0 small mb-2" onClick={() => window.open('/attendance/#/qr', '_blank')}>📷 Open Kiosk Mode</button>
+            
             <button className="btn btn-link text-warning text-decoration-none w-100 text-start p-0 small mb-2" onClick={resetDay}>Reset Date</button>
             <button className="btn btn-link text-danger text-decoration-none w-100 text-start p-0 small" onClick={() => signOut(auth)}>Sign Out</button>
           </div>
@@ -647,9 +676,9 @@ function AdminDashboard() {
 
             {activeTab === 'teachers' && (
               <div className="card metric-card p-4 shadow-lg">
-                <div className="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4 border-bottom pb-2 text-start">
-                    <h5 className="fw-bold text-primary mb-3 mb-md-0">Teacher Analytics</h5>
-                    <div className="d-flex gap-2 flex-wrap">
+                <div className="d-flex justify-content-between align-items-center mb-4 border-bottom pb-2 text-start">
+                    <h5 className="fw-bold text-primary mb-0">Teacher Analytics</h5>
+                    <div className="d-flex gap-2">
                         <select className="form-select form-select-sm w-auto" value={analyticsMode} onChange={e => setAnalyticsMode(e.target.value)}>
                             <option value="monthly">Monthly</option>
                             <option value="weekly">Weekly</option>
@@ -660,36 +689,37 @@ function AdminDashboard() {
                         <input type="month" className="form-control form-control-sm w-auto" value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} />
                     </div>
                 </div>
-                <div className="table-responsive">
-                    <table className="table align-middle text-start">
-                        <thead className="table-light"><tr><th>Teacher Name (Click 📷 for Code)</th><th className="text-center">Total Hours</th><th className="text-end pe-3">Actions</th></tr></thead>
-                        <tbody>
-                          {Object.keys(teachers).map(uid => {
-                            let hrs = 0;
-                            Object.keys(allData).forEach(date => {
-                              if (date.startsWith(selectedMonth)) {
-                                const isMatch = (analyticsMode === 'weekly') ? (getWeekOfMonth(date) === selectedWeek && allData[date][uid]) : (allData[date][uid]);
-                                if (isMatch) hrs += calculateDailyHoursFromLogs(allData[date][uid]).hours;
-                              }
-                            });
-                            return (
-                              <tr key={uid}>
-                                <td>
-                                    <div className="d-flex align-items-center">
-                                        <button className="btn btn-light btn-sm me-2 shadow-sm" onClick={() => setShowQRGen(uid)}>📷</button>
-                                        <button className="btn btn-link p-0 fw-bold text-decoration-none text-dark" onClick={() => setViewingStaff(uid)}>{teachers[uid].name}</button>
-                                    </div>
-                                </td>
-                                <td className="text-center fw-bold text-primary">{hrs.toFixed(2)} Hrs</td>
-                                <td className="text-end pe-3">
-                                    <button className="btn btn-outline-danger btn-sm" onClick={() => handleDeleteTeacher(uid, teachers[uid].name)}>🗑️ Delete</button>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                    </table>
-                </div>
+                <table className="table align-middle text-start">
+                    {/* ADDED ACTIONS COLUMN */}
+                    <thead className="table-light"><tr><th>Teacher Name (Click 📷 for Code)</th><th className="text-center">Total Hours</th><th className="text-end pe-3">Actions</th></tr></thead>
+                    <tbody>
+                      {Object.keys(teachers).map(uid => {
+                        let hrs = 0;
+                        Object.keys(allData).forEach(date => {
+                          if (date.startsWith(selectedMonth)) {
+                            const isMatch = (analyticsMode === 'weekly') ? (getWeekOfMonth(date) === selectedWeek && allData[date][uid]) : (allData[date][uid]);
+                            if (isMatch) hrs += calculateDailyHoursFromLogs(allData[date][uid]).hours;
+                          }
+                        });
+                        return (
+                          <tr key={uid}>
+                            <td>
+                                <div className="d-flex align-items-center">
+                                    <button className="btn btn-light btn-sm me-2 shadow-sm" onClick={() => setShowQRGen(uid)}>📷</button>
+                                    <button className="btn btn-link p-0 fw-bold text-decoration-none text-dark" onClick={() => setViewingStaff(uid)}>{teachers[uid].name}</button>
+                                </div>
+                            </td>
+                            <td className="text-center fw-bold text-primary">{hrs.toFixed(2)} Hrs</td>
+                            <td className="text-end pe-3">
+                                {/* ADDED RESET BUTTON NEXT TO DELETE */}
+                                <button className="btn btn-outline-warning btn-sm me-2" onClick={() => handleResetTeacherHours(uid, teachers[uid].name)}>↺ Reset</button>
+                                <button className="btn btn-outline-danger btn-sm" onClick={() => handleDeleteTeacher(uid, teachers[uid].name)}>🗑️ Delete</button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                </table>
               </div>
             )}
 
